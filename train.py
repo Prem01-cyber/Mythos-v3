@@ -4,6 +4,7 @@ train.py — Mythos v3 fine-tuning script
 Target model : Qwen/Qwen2.5-7B-Instruct
 Configuration: LoRA r=128 α=256 | ZeRO-2 | 4×GPU | bf16
 Effective batch: 2 per GPU × 4 GPUs × 16 grad accum = 128
+Dataset split : 90 / 5 / 5  (train / val / test)
 """
 
 import argparse
@@ -42,8 +43,10 @@ def parse_args():
     p = argparse.ArgumentParser(description="Mythos v3 fine-tuning")
     p.add_argument("--model-id",       default="Qwen/Qwen2.5-7B-Instruct",
                    help="HuggingFace model ID or local path")
-    p.add_argument("--train-file",     default="training_data_v5/train.jsonl")
-    p.add_argument("--val-file",       default="training_data_v5/val.jsonl")
+    p.add_argument("--train-file",     default="training_data/train.jsonl")
+    p.add_argument("--val-file",       default="training_data/val.jsonl")
+    p.add_argument("--test-file",      default="training_data/test.jsonl",
+                   help="Held-out test set evaluated once after training (90/5/5 split)")
     p.add_argument("--output-dir",     default="./mythos-v3-lora")
     p.add_argument("--merged-dir",     default="./mythos-v3-merged",
                    help="Directory to save final merged model (set empty to skip)")
@@ -67,6 +70,8 @@ def parse_args():
     p.add_argument("--max-train-samples", type=int, default=None,
                    help="Cap training examples (debugging)")
     p.add_argument("--max-val-samples",   type=int, default=5000)
+    p.add_argument("--max-test-samples",  type=int, default=None,
+                   help="Cap test examples for final evaluation (default: full test set)")
     p.add_argument("--seed",           type=int,   default=42)
     p.add_argument("--deepspeed",      default="deepspeed_zero2.json",
                    help="Path to DeepSpeed config (pass empty string to disable)")
@@ -154,6 +159,10 @@ def main():
         log.info("  Mythos v3 — Security LLM Fine-tuning")
         log.info("=" * 60)
         log.info(f"  Model      : {args.model_id}")
+        log.info(f"  Train file : {args.train_file}")
+        log.info(f"  Val file   : {args.val_file}")
+        log.info(f"  Test file  : {args.test_file}")
+        log.info(f"  Split      : 90 / 5 / 5  (train / val / test)")
         log.info(f"  LoRA       : r={args.lora_r}  alpha={args.lora_alpha}")
         log.info(f"  Precision  : BFloat16")
         log.info(f"  Per-GPU BS : {args.per_gpu_batch}")
@@ -182,6 +191,12 @@ def main():
     train_ds = load_jsonl(args.train_file, args.max_train_samples)
     val_ds   = load_jsonl(args.val_file,   args.max_val_samples)
 
+    test_ds = None
+    if args.test_file and Path(args.test_file).exists():
+        test_ds = load_jsonl(args.test_file, args.max_test_samples)
+    elif args.test_file:
+        log.warning(f"Test file not found: {args.test_file} — skipping final test eval")
+
     log.info("Applying chat template...")
     train_ds = train_ds.map(
         lambda ex: apply_chat_template(ex, tokenizer),
@@ -193,6 +208,12 @@ def main():
         num_proc=4,
         desc="Format val",
     )
+    if test_ds is not None:
+        test_ds = test_ds.map(
+            lambda ex: apply_chat_template(ex, tokenizer),
+            num_proc=4,
+            desc="Format test",
+        )
 
     # ── Model ──────────────────────────────────────────────────────────────
     log.info(f"Loading model: {args.model_id}")
@@ -301,6 +322,24 @@ def main():
     # ── Train ──────────────────────────────────────────────────────────────
     log.info("Starting training...")
     trainer.train(resume_from_checkpoint=resume)
+
+    # ── Evaluate on held-out test set (run once, after best model selected) ─
+    if test_ds is not None:
+        log.info("=" * 60)
+        log.info("Running final evaluation on held-out TEST set...")
+        log.info("=" * 60)
+        test_metrics = trainer.evaluate(eval_dataset=test_ds, metric_key_prefix="test")
+        if is_main:
+            log.info("Test set results:")
+            for k, v in test_metrics.items():
+                log.info(f"  {k}: {v}")
+
+            # Persist test metrics alongside the adapter
+            metrics_path = Path(args.output_dir) / "test_metrics.json"
+            metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(metrics_path, "w") as f:
+                json.dump(test_metrics, f, indent=2)
+            log.info(f"Test metrics saved to {metrics_path}")
 
     # ── Save final adapter ─────────────────────────────────────────────────
     if is_main:

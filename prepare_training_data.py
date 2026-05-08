@@ -707,12 +707,14 @@ def parse_payload_lists(data_dir: Path) -> Iterator[dict]:
 # ─── Writer / aggregator ──────────────────────────────────────────────────────
 
 def run(data_dir: Path, output_dir: Path, seed: int = 42, val_ratio: float = 0.05,
+        test_ratio: float = 0.05,
         limit: int | None = None, per_source_limit: int | None = None, dry_run: bool = False):
     random.seed(seed)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     train_path = output_dir / "train.jsonl"
-    val_path = output_dir / "val.jsonl"
+    val_path   = output_dir / "val.jsonl"
+    test_path  = output_dir / "test.jsonl"
     stats_path = output_dir / "dataset_stats.json"
 
     source_stats: dict[str, int] = {}
@@ -788,24 +790,24 @@ def run(data_dir: Path, output_dir: Path, seed: int = 42, val_ratio: float = 0.0
     indices = list(range(total))
     random.shuffle(indices)
 
-    # Build index map
-    print(f"[4/5] Reading temp file and writing train/val split...")
-    val_count = max(1, int(total * val_ratio))
-    train_count = total - val_count
-    val_indices = set(indices[:val_count])
+    print(f"[4/5] Reading temp file and writing train/val/test split (90/5/5)...")
+    val_count  = max(1, int(total * val_ratio))
+    test_count = max(1, int(total * test_ratio))
+    train_count = total - val_count - test_count
 
-    # Read all lines
+    # Read all lines and apply shuffle order
     with open(temp_path, "r", encoding="utf-8") as tmp_f:
         all_lines = tmp_f.readlines()
-
-    # Apply shuffle order
     shuffled_lines = [all_lines[i] for i in indices]
 
     with open(train_path, "w", encoding="utf-8") as train_f, \
-         open(val_path, "w", encoding="utf-8") as val_f:
+         open(val_path,   "w", encoding="utf-8") as val_f, \
+         open(test_path,  "w", encoding="utf-8") as test_f:
         for i, line in enumerate(shuffled_lines):
             if i < val_count:
                 val_f.write(line)
+            elif i < val_count + test_count:
+                test_f.write(line)
             else:
                 train_f.write(line)
 
@@ -815,11 +817,16 @@ def run(data_dir: Path, output_dir: Path, seed: int = 42, val_ratio: float = 0.0
 
     elapsed = time.time() - t0
 
+    train_pct = 100 * train_count / total
+    val_pct   = 100 * val_count   / total
+    test_pct  = 100 * test_count  / total
+
     stats = {
         "total_examples": total,
         "train_examples": train_count,
-        "val_examples": val_count,
-        "split_ratio": f"{100*(1-val_ratio):.0f}/{100*val_ratio:.0f}",
+        "val_examples":   val_count,
+        "test_examples":  test_count,
+        "split_ratio": f"{train_pct:.0f}/{val_pct:.0f}/{test_pct:.0f}",
         "duplicates_removed": filtered,
         "seed": seed,
         "elapsed_seconds": round(elapsed, 1),
@@ -829,8 +836,9 @@ def run(data_dir: Path, output_dir: Path, seed: int = 42, val_ratio: float = 0.0
     stats_path.write_text(json.dumps(stats, indent=2, ensure_ascii=False))
 
     print(f"\n[5/5] Done!")
-    print(f"  train.jsonl : {train_count:,} examples")
-    print(f"  val.jsonl   : {val_count:,} examples")
+    print(f"  train.jsonl : {train_count:,} examples  ({train_pct:.1f}%)")
+    print(f"  val.jsonl   : {val_count:,} examples  ({val_pct:.1f}%)")
+    print(f"  test.jsonl  : {test_count:,} examples  ({test_pct:.1f}%)")
     print(f"  Total time  : {elapsed/60:.1f} minutes")
     print(f"\n  Source breakdown:")
     for src, cnt in source_stats.items():
@@ -869,6 +877,12 @@ def main():
         help="Fraction of data to use for validation (default: 0.05)",
     )
     parser.add_argument(
+        "--test-ratio",
+        type=float,
+        default=0.05,
+        help="Fraction of data to use for test (default: 0.05)",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -893,6 +907,7 @@ def main():
     print(f"  Data dir   : {args.data_dir.resolve()}")
     print(f"  Output dir : {args.output_dir.resolve()}")
     print(f"  Val ratio  : {args.val_ratio}")
+    print(f"  Test ratio : {args.test_ratio}")
     print(f"  Seed       : {args.seed}")
     if args.limit:
         print(f"  Limit      : {args.limit:,}")
@@ -911,6 +926,7 @@ def main():
         output_dir=args.output_dir,
         seed=args.seed,
         val_ratio=args.val_ratio,
+        test_ratio=args.test_ratio,
         limit=args.limit,
         per_source_limit=args.per_source_limit,
         dry_run=args.dry_run,

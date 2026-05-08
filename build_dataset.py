@@ -7125,6 +7125,7 @@ def parse_vxug_code_files(data_dir: Path) -> Iterator[dict]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run(data_dir: Path, output_dir: Path, seed: int = 42, val_ratio: float = 0.05,
+        test_ratio: float = 0.05,
         exploit_sample: int = 50000, bounty_sample: int = 40000,
         tool_chains: int = 8000, limit: int | None = None):
 
@@ -7247,27 +7248,40 @@ def run(data_dir: Path, output_dir: Path, seed: int = 42, val_ratio: float = 0.0
     random.shuffle(indices)
     shuffled = [all_lines[i] for i in indices]
 
-    print("[4/5] Writing train/val split...")
-    val_n = max(1, int(total * val_ratio))
-    train_n = total - val_n
+    print("[4/5] Writing train/val/test split (90/5/5)...")
+    val_n  = max(1, int(total * val_ratio))
+    test_n = max(1, int(total * test_ratio))
+    train_n = total - val_n - test_n
 
     train_path = output_dir / "train.jsonl"
-    val_path = output_dir / "val.jsonl"
+    val_path   = output_dir / "val.jsonl"
+    test_path  = output_dir / "test.jsonl"
     stats_path = output_dir / "dataset_stats.json"
 
     with open(train_path, "w", encoding="utf-8") as tf, \
-         open(val_path, "w", encoding="utf-8") as vf:
+         open(val_path,   "w", encoding="utf-8") as vf, \
+         open(test_path,  "w", encoding="utf-8") as xf:
         for i, line in enumerate(shuffled):
-            (vf if i < val_n else tf).write(line)
+            if i < val_n:
+                vf.write(line)
+            elif i < val_n + test_n:
+                xf.write(line)
+            else:
+                tf.write(line)
 
     temp_path.unlink(missing_ok=True)
+
+    train_pct = 100 * train_n / total
+    val_pct   = 100 * val_n   / total
+    test_pct  = 100 * test_n  / total
 
     elapsed = time.time() - t0
     stats = {
         "total_examples": total,
         "train_examples": train_n,
-        "val_examples": val_n,
-        "split_ratio": f"{100*(1-val_ratio):.0f}/{100*val_ratio:.0f}",
+        "val_examples":   val_n,
+        "test_examples":  test_n,
+        "split_ratio": f"{train_pct:.0f}/{val_pct:.0f}/{test_pct:.0f}",
         "duplicates_removed": dupes,
         "seed": seed,
         "elapsed_seconds": round(elapsed, 1),
@@ -7276,8 +7290,9 @@ def run(data_dir: Path, output_dir: Path, seed: int = 42, val_ratio: float = 0.0
     stats_path.write_text(json.dumps(stats, indent=2, ensure_ascii=False))
 
     print(f"\n[5/5] Done!")
-    print(f"  train.jsonl : {train_n:,}")
-    print(f"  val.jsonl   : {val_n:,}")
+    print(f"  train.jsonl : {train_n:,}  ({train_pct:.1f}%)")
+    print(f"  val.jsonl   : {val_n:,}  ({val_pct:.1f}%)")
+    print(f"  test.jsonl  : {test_n:,}  ({test_pct:.1f}%)")
     print(f"  Total time  : {elapsed/60:.1f} min\n")
     for src, cnt in source_stats.items():
         print(f"  {src:30s}: {cnt:>10,}")
@@ -7289,7 +7304,10 @@ def main():
     parser.add_argument("--data-dir", type=Path, default=Path("./data"))
     parser.add_argument("--output-dir", type=Path, default=Path("./training_data_v3"))
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--val-ratio", type=float, default=0.05)
+    parser.add_argument("--val-ratio",  type=float, default=0.05,
+                        help="Fraction for validation (default: 0.05)")
+    parser.add_argument("--test-ratio", type=float, default=0.05,
+                        help="Fraction for test (default: 0.05)")
     parser.add_argument("--exploit-sample", type=int, default=200000,
                         help="CVEs to generate exploit code for (default: 200000)")
     parser.add_argument("--bounty-sample", type=int, default=100000,
@@ -7321,6 +7339,7 @@ def main():
         output_dir=args.output_dir,
         seed=args.seed,
         val_ratio=args.val_ratio,
+        test_ratio=args.test_ratio,
         exploit_sample=args.exploit_sample,
         bounty_sample=args.bounty_sample,
         tool_chains=args.tool_chains,

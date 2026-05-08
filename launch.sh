@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
 #  Mythos v3 — Training launch script
-#  Config: LoRA r=128 α=256 | ZeRO-2 | 4×GPU | bf16 | effective batch=128
+#  Config  : LoRA r=128 α=256 | ZeRO-2 | 4×GPU | bf16 | effective batch=128
+#  Dataset : training_data/  (90/5/5 train/val/test split)
 #
 #  Usage:
 #    bash launch.sh                          # run with defaults
@@ -69,14 +70,15 @@ PYCHECK
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TRAIN_FILE="${SCRIPT_DIR}/training_data_v5/train.jsonl"
-VAL_FILE="${SCRIPT_DIR}/training_data_v5/val.jsonl"
+TRAIN_FILE="${SCRIPT_DIR}/training_data/train.jsonl"
+VAL_FILE="${SCRIPT_DIR}/training_data/val.jsonl"
+TEST_FILE="${SCRIPT_DIR}/training_data/test.jsonl"
 DS_CONFIG="${SCRIPT_DIR}/deepspeed_zero2.json"
 OUTPUT_DIR="${SCRIPT_DIR}/mythos-v3-lora"
 MERGED_DIR="${SCRIPT_DIR}/mythos-v3-merged"
 
 # ── Verify data exists ────────────────────────────────────────────────────────
-for f in "$TRAIN_FILE" "$VAL_FILE" "$DS_CONFIG"; do
+for f in "$TRAIN_FILE" "$VAL_FILE" "$TEST_FILE" "$DS_CONFIG"; do
     if [ ! -f "$f" ]; then
         echo "ERROR: Required file not found: $f"
         exit 1
@@ -85,10 +87,12 @@ done
 
 TRAIN_LINES=$(wc -l < "$TRAIN_FILE")
 VAL_LINES=$(wc -l < "$VAL_FILE")
+TEST_LINES=$(wc -l < "$TEST_FILE")
 echo ""
-echo "=== Dataset ==="
-echo "  Train examples : $TRAIN_LINES"
-echo "  Val examples   : $VAL_LINES"
+echo "=== Dataset (90/5/5 split) ==="
+echo "  Train examples : $TRAIN_LINES  (90%)"
+echo "  Val examples   : $VAL_LINES  (5%)"
+echo "  Test examples  : $TEST_LINES  (5%)  ← held-out, evaluated after training"
 echo "  Output dir     : $OUTPUT_DIR"
 
 # ── Training math ────────────────────────────────────────────────────────────
@@ -126,6 +130,7 @@ deepspeed \
     --model-id "Qwen/Qwen2.5-7B-Instruct" \
     --train-file "$TRAIN_FILE" \
     --val-file "$VAL_FILE" \
+    --test-file "$TEST_FILE" \
     --output-dir "$OUTPUT_DIR" \
     --merged-dir "$MERGED_DIR" \
     --lora-r 128 \
@@ -147,5 +152,6 @@ deepspeed \
 
 echo ""
 echo "=== Training finished: $(date) ==="
-echo "  LoRA adapter : $OUTPUT_DIR/final"
-echo "  Merged model : $MERGED_DIR"
+echo "  LoRA adapter  : $OUTPUT_DIR/final"
+echo "  Merged model  : $MERGED_DIR"
+echo "  Test metrics  : $OUTPUT_DIR/test_metrics.json"
