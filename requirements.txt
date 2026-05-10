@@ -1,20 +1,20 @@
 # Mythos v3 — Training dependencies
+#
 # Install order:
-#   1. uv pip install -r requirements.txt
-#   2. pip install unsloth   (handles its own torch/triton deps)
+#   1. pip install unsloth                              (pulls in compatible transformers/trl/peft)
+#   2. pip install "torch>=2.6.0" \
+#        --index-url https://download.pytorch.org/whl/cu124  (torchao 0.17+ needs torch>=2.6)
+#   3. pip install -r requirements.txt                  (pin remaining utilities)
+#
+# NOTE: Unsloth manages its own ecosystem — do NOT pin torch/transformers/trl/peft here
+#       to avoid conflicting with what Unsloth expects.
 
-# Core training stack
-torch==2.5.1
-transformers==4.46.3
-peft==0.13.2
-trl==0.12.2
-accelerate==1.1.1
-
-# Unsloth — installed separately (manages its own CUDA kernel deps)
-# pip install unsloth
-# unsloth
-
-# Flash attention — bundled inside Unsloth; no separate install needed
+# Data & utilities
+datasets>=4.0.0
+sentencepiece==0.2.0
+protobuf==5.28.3
+packaging>=24.0
+safetensors>=0.4.5
 
 # Data
 datasets==3.1.0
