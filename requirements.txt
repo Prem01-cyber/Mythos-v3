@@ -1,9 +1,7 @@
 # Mythos v3 — Training dependencies
-# Install: uv pip install -r requirements.txt
-#
-# NOTE:
-# - These versions are pinned for a stable FlashAttention-compatible stack.
-# - CUDA toolkit should be 12.1/12.4 for best compatibility.
+# Install order:
+#   1. uv pip install -r requirements.txt
+#   2. pip install unsloth   (handles its own torch/triton deps)
 
 # Core training stack
 torch==2.5.1
@@ -11,14 +9,12 @@ transformers==4.46.3
 peft==0.13.2
 trl==0.12.2
 accelerate==1.1.1
-deepspeed==0.15.4
 
-# Flash attention (install separately AFTER torch is installed)
-# Reason: pyproject build isolation may not see torch and fails with
-# "ModuleNotFoundError: No module named 'torch'".
-# Install command:
-#   uv pip install flash-attn==2.7.4.post1 --no-build-isolation
-# flash-attn==2.7.4.post1
+# Unsloth — installed separately (manages its own CUDA kernel deps)
+# pip install unsloth
+# unsloth
+
+# Flash attention — bundled inside Unsloth; no separate install needed
 
 # Data
 datasets==3.1.0

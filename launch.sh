@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
 #  Mythos v3 — Training launch script
-#  Config  : LoRA r=128 α=256 | ZeRO-2 | bf16 | flash-attn | no CPU offload
+#  Config  : LoRA r=128 α=256 | Unsloth | single GPU | bf16
 #  Dataset : training_data/  (90/5/5 train/val/test split)
 #
 #  Usage:
@@ -114,8 +114,8 @@ echo "  Tokenized dir  : $TOKENIZED_DIR"
 echo "  Output dir     : $OUTPUT_DIR"
 
 # ── Training math ────────────────────────────────────────────────────────────
-PER_GPU_BATCH=${PER_GPU_BATCH:-4}
-GRAD_ACCUM=${GRAD_ACCUM:-24}
+PER_GPU_BATCH=${PER_GPU_BATCH:-8}
+GRAD_ACCUM=${GRAD_ACCUM:-12}
 EPOCHS=3
 EFF_BATCH=$(python3 -c "print($PER_GPU_BATCH * $NUM_GPUS * $GRAD_ACCUM)")
 TOTAL_STEPS=$(python3 -c "import math; print(math.ceil($TRAIN_LINES / $EFF_BATCH) * $EPOCHS)")
@@ -141,10 +141,7 @@ echo "=== Launching training ==="
 echo "$(date)"
 echo ""
 
-deepspeed \
-    --num_gpus="$NUM_GPUS" \
-    --master_port=29500 \
-    "${SCRIPT_DIR}/train.py" \
+python3 "${SCRIPT_DIR}/train.py" \
     --model-id "Qwen/Qwen2.5-7B-Instruct" \
     --train-file "$TRAIN_FILE" \
     --val-file "$VAL_FILE" \
@@ -166,7 +163,6 @@ deepspeed \
     --log-steps 10 \
     --max-val-samples 5000 \
     --seed 42 \
-    --deepspeed "$DS_CONFIG" \
     "$@"
 
 echo ""

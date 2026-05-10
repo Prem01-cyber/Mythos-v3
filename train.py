@@ -2,8 +2,7 @@
 """
 train.py — Mythos v3 fine-tuning script
 Target model : Qwen/Qwen2.5-7B-Instruct
-Configuration: LoRA r=128 α=256 | ZeRO-2 | 4×GPU | bf16
-Effective batch: 2 per GPU × 4 GPUs × 16 grad accum = 128
+Configuration: LoRA r=128 α=256 | Unsloth | single GPU | bf16
 Dataset split : 90 / 5 / 5  (train / val / test)
 """
 
@@ -11,22 +10,15 @@ import argparse
 import inspect
 import json
 import logging
-import math
 import os
 import sys
 from pathlib import Path
 
 import torch
-from datasets import Dataset, load_dataset, load_from_disk
-from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    BitsAndBytesConfig,
-    TrainerCallback,
-    TrainingArguments,
-)
+from datasets import Dataset, load_from_disk
+from transformers import TrainerCallback
 from trl import SFTConfig, SFTTrainer
+from unsloth import FastLanguageModel
 
 logging.basicConfig(
     level=logging.INFO,
@@ -74,10 +66,6 @@ def parse_args():
     p.add_argument("--max-test-samples",  type=int, default=None,
                    help="Cap test examples for final evaluation (default: full test set)")
     p.add_argument("--seed",           type=int,   default=42)
-    p.add_argument("--deepspeed",      default="deepspeed_zero2.json",
-                   help="Path to DeepSpeed config (pass empty string to disable)")
-    p.add_argument("--local_rank",     type=int,   default=-1,
-                   help="Injected automatically by DeepSpeed launcher — do not set manually")
     p.add_argument("--tokenized-dir",  default="./tokenized_data",
                    help="Directory of pre-formatted Arrow datasets (from pretokenize.py). "
                         "If present, skips apply_chat_template map at startup.")
@@ -128,67 +116,6 @@ def apply_chat_template(example: dict, tokenizer) -> dict:
     return {"text": text}
 
 
-def _bf16_causal_lm_loss(
-    logits, labels, vocab_size,
-    num_items_in_batch=None, ignore_index=-100, **kwargs
-):
-    """
-    Cross-entropy loss that stays in bf16 — no float32 materialisation.
-
-    The default transformers ForCausalLMLoss calls logits.float() before
-    computing CE, which at (batch=16, seqlen=2048, vocab=152 064) allocates
-    ~19 GB float32 tensor on top of an already large bf16 logits tensor.
-    PyTorch's CrossEntropyLoss handles bf16 inputs correctly without that
-    extra allocation.
-    """
-    from torch.nn import CrossEntropyLoss
-    shift_logits = logits[..., :-1, :].contiguous()
-    shift_labels = labels[..., 1:].contiguous()
-    loss_fct = CrossEntropyLoss(ignore_index=ignore_index)
-    return loss_fct(
-        shift_logits.view(-1, vocab_size),
-        shift_labels.view(-1).to(shift_logits.device),
-    )
-
-
-def patch_model_loss(model) -> None:
-    """
-    Patch loss_function on the live model instance (not the module namespace).
-
-    Module-level replacement of loss_utils.ForCausalLMLoss has no effect
-    because Qwen2ForCausalLM stores a direct reference to the original
-    function object at class/instance creation time.  We must overwrite
-    the attribute on the actual instance after model initialisation.
-    """
-    # Navigate through PEFT wrappers: PeftModel → LoraModel → Qwen2ForCausalLM
-    inner = model
-    while hasattr(inner, "base_model"):
-        inner = inner.base_model
-    if hasattr(inner, "model"):
-        inner = inner.model
-
-    if hasattr(inner, "loss_function"):
-        inner.loss_function = _bf16_causal_lm_loss
-        log.info("Patched model.loss_function: bf16 logits, no float32 upcast.")
-    else:
-        log.warning("loss_function attribute not found on base model — float32 upcast may remain.")
-
-
-def load_deepspeed_config(path: str) -> dict:
-    """Load and sanitize DeepSpeed config for backward-compatible keys."""
-    with open(path, "r", encoding="utf-8") as f:
-        config = json.load(f)
-
-    zero_cfg = config.get("zero_optimization")
-    if isinstance(zero_cfg, dict):
-        # DeepSpeed rejects configs that specify both keys together.
-        if "offload_optimizer" in zero_cfg and "cpu_offload" in zero_cfg:
-            zero_cfg.pop("cpu_offload", None)
-            log.warning(
-                "DeepSpeed config had both 'cpu_offload' and 'offload_optimizer'; "
-                "removed deprecated 'cpu_offload'."
-            )
-    return config
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -248,12 +175,13 @@ def main():
         log.info(f"  Max seqlen : {args.max_seq_len}")
         log.info("=" * 60)
 
-    # ── Tokenizer ──────────────────────────────────────────────────────────
-    log.info(f"Loading tokenizer: {args.model_id}")
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model_id,
-        trust_remote_code=True,
-        padding_side="right",
+    # ── Model + Tokenizer (Unsloth loads directly to GPU) ──────────────────
+    log.info(f"Loading model via Unsloth: {args.model_id}")
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=args.model_id,
+        max_seq_length=args.max_seq_len,
+        dtype=torch.bfloat16,
+        load_in_4bit=False,
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -323,29 +251,18 @@ def main():
                 desc="Format test",
             )
 
-    # ── Model ──────────────────────────────────────────────────────────────
-    log.info(f"Loading model: {args.model_id}")
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_id,
-        torch_dtype=torch.bfloat16,
-        trust_remote_code=True,
-        use_cache=False,          # must be False with gradient checkpointing
-        attn_implementation="flash_attention_2",
-    )
-
-    # ── LoRA ───────────────────────────────────────────────────────────────
+    # ── LoRA (Unsloth-optimised) ───────────────────────────────────────────
     log.info(f"Applying LoRA: r={args.lora_r}, alpha={args.lora_alpha}")
-    lora_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
+    model = FastLanguageModel.get_peft_model(
+        model,
         r=args.lora_r,
+        target_modules=QWEN_LORA_TARGETS,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
         bias="none",
-        target_modules=QWEN_LORA_TARGETS,
-        modules_to_save=[],       # keep base model frozen except LoRA
+        use_gradient_checkpointing="unsloth",
+        random_state=args.seed,
     )
-    model = get_peft_model(model, lora_config)
-    patch_model_loss(model)
 
     if is_main:
         model.print_trainable_parameters()
@@ -355,17 +272,6 @@ def main():
             log.info(f"GPU memory after model load: {allocated:.1f} GB")
 
     # ── Training arguments ─────────────────────────────────────────────────
-    ds_config = None
-    if args.deepspeed:
-        if Path(args.deepspeed).exists():
-            try:
-                ds_config = load_deepspeed_config(args.deepspeed)
-            except Exception as e:
-                log.warning(f"Failed to load DeepSpeed config '{args.deepspeed}': {e}")
-                log.warning("Falling back to no DeepSpeed config")
-        else:
-            log.warning(f"DeepSpeed config '{args.deepspeed}' not found — running without DeepSpeed")
-
     sft_sig = inspect.signature(SFTConfig.__init__).parameters
     sft_kwargs = {
         "output_dir": args.output_dir,
@@ -392,18 +298,14 @@ def main():
         "optim": "adamw_torch_fused",
         "weight_decay": 0.01,
         "max_grad_norm": 1.0,
-        "deepspeed": ds_config,
-        "report_to": "none",   # change to "wandb" if needed
+        "report_to": "none",
         "run_name": "mythos-v3",
         "remove_unused_columns": True,
         "dataloader_num_workers": 4,
         "dataloader_pin_memory": True,
-        "ddp_find_unused_parameters": False,
     }
 
     # Version-specific compatibility across TRL/Transformers releases.
-    if "gradient_checkpointing_kwargs" in sft_sig:
-        sft_kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
     if "max_length" in sft_sig:
         sft_kwargs["max_length"] = args.max_seq_len
     elif "max_seq_length" in sft_sig:
@@ -478,18 +380,9 @@ def main():
         # ── Merge & save full model (optional) ────────────────────────────
         if args.merged_dir:
             log.info(f"Merging LoRA weights into base model → {args.merged_dir}")
-            from peft import PeftModel
-            log.info("  Loading base model for merge...")
-            base = AutoModelForCausalLM.from_pretrained(
-                args.model_id,
-                torch_dtype=torch.bfloat16,
-                trust_remote_code=True,
-                device_map="cpu",
+            model.save_pretrained_merged(
+                args.merged_dir, tokenizer, save_method="merged_16bit"
             )
-            peft_model = PeftModel.from_pretrained(base, f"{args.output_dir}/final")
-            merged = peft_model.merge_and_unload()
-            merged.save_pretrained(args.merged_dir, safe_serialization=True)
-            tokenizer.save_pretrained(args.merged_dir)
             log.info(f"Merged model saved to {args.merged_dir}")
 
     log.info("Training complete.")
