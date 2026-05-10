@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
 #  Mythos v3 — Training launch script
-#  Config  : LoRA r=128 α=256 | ZeRO-2 | 2×GPU | bf16 | effective batch=128
+#  Config  : LoRA r=128 α=256 | ZeRO-2 | 2×GPU | bf16 | effective batch=128 | no CPU offload
 #  Dataset : training_data/  (90/5/5 train/val/test split)
 #
 #  Usage:
@@ -72,17 +72,32 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TRAIN_FILE="${SCRIPT_DIR}/training_data/train.jsonl"
 VAL_FILE="${SCRIPT_DIR}/training_data/val.jsonl"
 TEST_FILE="${SCRIPT_DIR}/training_data/test.jsonl"
+TOKENIZED_DIR="${SCRIPT_DIR}/tokenized_data"
 DS_CONFIG="${SCRIPT_DIR}/deepspeed_zero2.json"
 OUTPUT_DIR="${SCRIPT_DIR}/mythos-v3-lora"
 MERGED_DIR="${SCRIPT_DIR}/mythos-v3-merged"
 
-# ── Verify data exists ────────────────────────────────────────────────────────
+# ── Verify raw data and config exist ─────────────────────────────────────────
 for f in "$TRAIN_FILE" "$VAL_FILE" "$TEST_FILE" "$DS_CONFIG"; do
     if [ ! -f "$f" ]; then
         echo "ERROR: Required file not found: $f"
         exit 1
     fi
 done
+
+# ── Pre-tokenization (run once, skipped automatically on subsequent runs) ─────
+echo ""
+echo "=== Pre-tokenization ==="
+if [ -d "${TOKENIZED_DIR}/train" ] && [ -d "${TOKENIZED_DIR}/val" ]; then
+    echo "  Pre-formatted data found at ${TOKENIZED_DIR} — skipping"
+else
+    echo "  Running pretokenize.py (this takes ~5-10 min, only needed once)..."
+    python3 "${SCRIPT_DIR}/pretokenize.py" \
+        --data-dir   "${SCRIPT_DIR}/training_data" \
+        --output-dir "$TOKENIZED_DIR" \
+        --num-proc   8
+    echo "  Pre-tokenization complete."
+fi
 
 TRAIN_LINES=$(wc -l < "$TRAIN_FILE")
 VAL_LINES=$(wc -l < "$VAL_FILE")
@@ -92,11 +107,12 @@ echo "=== Dataset (90/5/5 split) ==="
 echo "  Train examples : $TRAIN_LINES  (90%)"
 echo "  Val examples   : $VAL_LINES  (5%)"
 echo "  Test examples  : $TEST_LINES  (5%)  ← held-out, evaluated after training"
+echo "  Tokenized dir  : $TOKENIZED_DIR"
 echo "  Output dir     : $OUTPUT_DIR"
 
 # ── Training math ────────────────────────────────────────────────────────────
-PER_GPU_BATCH=2
-GRAD_ACCUM=32
+PER_GPU_BATCH=4
+GRAD_ACCUM=16
 EPOCHS=3
 EFF_BATCH=$(python3 -c "print($PER_GPU_BATCH * $NUM_GPUS * $GRAD_ACCUM)")
 TOTAL_STEPS=$(python3 -c "import math; print(math.ceil($TRAIN_LINES / $EFF_BATCH) * $EPOCHS)")
@@ -130,6 +146,7 @@ deepspeed \
     --train-file "$TRAIN_FILE" \
     --val-file "$VAL_FILE" \
     --test-file "$TEST_FILE" \
+    --tokenized-dir "$TOKENIZED_DIR" \
     --output-dir "$OUTPUT_DIR" \
     --merged-dir "$MERGED_DIR" \
     --lora-r 128 \

@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 import torch
-from datasets import Dataset, load_dataset
+from datasets import Dataset, load_dataset, load_from_disk
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
 from transformers import (
     AutoModelForCausalLM,
@@ -77,6 +77,9 @@ def parse_args():
                    help="Path to DeepSpeed config (pass empty string to disable)")
     p.add_argument("--local_rank",     type=int,   default=-1,
                    help="Injected automatically by DeepSpeed launcher — do not set manually")
+    p.add_argument("--tokenized-dir",  default="./tokenized_data",
+                   help="Directory of pre-formatted Arrow datasets (from pretokenize.py). "
+                        "If present, skips apply_chat_template map at startup.")
     return p.parse_args()
 
 
@@ -189,33 +192,68 @@ def main():
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
     # ── Datasets ───────────────────────────────────────────────────────────
-    log.info("Loading datasets...")
-    train_ds = load_jsonl(args.train_file, args.max_train_samples)
-    val_ds   = load_jsonl(args.val_file,   args.max_val_samples)
-
-    test_ds = None
-    if args.test_file and Path(args.test_file).exists():
-        test_ds = load_jsonl(args.test_file, args.max_test_samples)
-    elif args.test_file:
-        log.warning(f"Test file not found: {args.test_file} — skipping final test eval")
-
-    log.info("Applying chat template...")
-    train_ds = train_ds.map(
-        lambda ex: apply_chat_template(ex, tokenizer),
-        num_proc=8,
-        desc="Format train",
+    tok_dir = Path(args.tokenized_dir)
+    use_pretokenized = (
+        tok_dir.exists()
+        and (tok_dir / "train").exists()
+        and (tok_dir / "val").exists()
     )
-    val_ds = val_ds.map(
-        lambda ex: apply_chat_template(ex, tokenizer),
-        num_proc=4,
-        desc="Format val",
-    )
-    if test_ds is not None:
-        test_ds = test_ds.map(
+
+    if use_pretokenized:
+        log.info(f"Loading pre-formatted datasets from {tok_dir} ...")
+        train_ds = load_from_disk(str(tok_dir / "train"))
+        val_ds   = load_from_disk(str(tok_dir / "val"))
+
+        if args.max_train_samples:
+            train_ds = train_ds.select(range(min(args.max_train_samples, len(train_ds))))
+        if args.max_val_samples:
+            val_ds = val_ds.select(range(min(args.max_val_samples, len(val_ds))))
+
+        test_ds = None
+        test_tok = tok_dir / "test"
+        if test_tok.exists():
+            test_ds = load_from_disk(str(test_tok))
+            if args.max_test_samples:
+                test_ds = test_ds.select(range(min(args.max_test_samples, len(test_ds))))
+        else:
+            log.warning("Pre-formatted test split not found — skipping final test eval")
+
+        log.info(f"  train : {len(train_ds):,} examples")
+        log.info(f"  val   : {len(val_ds):,} examples")
+        if test_ds is not None:
+            log.info(f"  test  : {len(test_ds):,} examples")
+
+    else:
+        log.info(f"Pre-formatted data not found at {tok_dir} — applying chat template on the fly")
+        log.info("  (Run pretokenize.py once to speed up future starts)")
+
+        log.info("Loading datasets...")
+        train_ds = load_jsonl(args.train_file, args.max_train_samples)
+        val_ds   = load_jsonl(args.val_file,   args.max_val_samples)
+
+        test_ds = None
+        if args.test_file and Path(args.test_file).exists():
+            test_ds = load_jsonl(args.test_file, args.max_test_samples)
+        elif args.test_file:
+            log.warning(f"Test file not found: {args.test_file} — skipping final test eval")
+
+        log.info("Applying chat template...")
+        train_ds = train_ds.map(
+            lambda ex: apply_chat_template(ex, tokenizer),
+            num_proc=8,
+            desc="Format train",
+        )
+        val_ds = val_ds.map(
             lambda ex: apply_chat_template(ex, tokenizer),
             num_proc=4,
-            desc="Format test",
+            desc="Format val",
         )
+        if test_ds is not None:
+            test_ds = test_ds.map(
+                lambda ex: apply_chat_template(ex, tokenizer),
+                num_proc=4,
+                desc="Format test",
+            )
 
     # ── Model ──────────────────────────────────────────────────────────────
     log.info(f"Loading model: {args.model_id}")
