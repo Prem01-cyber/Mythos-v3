@@ -15,7 +15,7 @@ set -euo pipefail
 # ── Environment ──────────────────────────────────────────────────────────────
 export PYTHONUNBUFFERED=1
 export TOKENIZERS_PARALLELISM=false
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 export CUDA_LAUNCH_BLOCKING=0
 export NCCL_DEBUG=WARN
 
@@ -114,8 +114,8 @@ echo "  Tokenized dir  : $TOKENIZED_DIR"
 echo "  Output dir     : $OUTPUT_DIR"
 
 # ── Training math ────────────────────────────────────────────────────────────
-PER_GPU_BATCH=${PER_GPU_BATCH:-48}
-GRAD_ACCUM=${GRAD_ACCUM:-2}
+PER_GPU_BATCH=${PER_GPU_BATCH:-16}
+GRAD_ACCUM=${GRAD_ACCUM:-6}
 EPOCHS=3
 EFF_BATCH=$(python3 -c "print($PER_GPU_BATCH * $NUM_GPUS * $GRAD_ACCUM)")
 TOTAL_STEPS=$(python3 -c "import math; print(math.ceil($TRAIN_LINES / $EFF_BATCH) * $EPOCHS)")
