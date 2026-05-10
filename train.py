@@ -7,7 +7,6 @@ Effective batch: 2 per GPU × 4 GPUs × 16 grad accum = 128
 Dataset split : 90 / 5 / 5  (train / val / test)
 """
 
-from torch._C import torch_dtype
 import argparse
 import json
 import logging
