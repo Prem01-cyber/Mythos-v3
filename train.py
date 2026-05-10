@@ -221,7 +221,7 @@ def main():
     log.info(f"Loading model: {args.model_id}")
     model = AutoModelForCausalLM.from_pretrained(
         args.model_id,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         trust_remote_code=True,
         use_cache=False,          # must be False with gradient checkpointing
     )

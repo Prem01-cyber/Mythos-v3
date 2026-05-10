@@ -1,7 +1,7 @@
 {
-  "train_micro_batch_size_per_gpu": 2,
-  "gradient_accumulation_steps": 32,
-  "gradient_clipping": 1.0,
+  "train_micro_batch_size_per_gpu": "auto",
+  "gradient_accumulation_steps": "auto",
+  "gradient_clipping": "auto",
 
   "zero_optimization": {
     "stage": 2,
@@ -15,39 +15,30 @@
   },
 
   "bf16": {
-    "enabled": true
+    "enabled": "auto"
   },
   "fp16": {
-    "enabled": false
+    "enabled": "auto"
   },
 
   "optimizer": {
     "type": "AdamW",
     "params": {
-      "lr": 2e-5,
-      "betas": [0.9, 0.95],
-      "eps": 1e-8,
-      "weight_decay": 0.01
+      "lr": "auto",
+      "betas": "auto",
+      "eps": "auto",
+      "weight_decay": "auto"
     }
   },
 
   "scheduler": {
     "type": "WarmupDecayLR",
     "params": {
-      "warmup_min_lr": 0,
-      "warmup_max_lr": 2e-5,
-      "warmup_num_steps": 100,
+      "warmup_min_lr": "auto",
+      "warmup_max_lr": "auto",
+      "warmup_num_steps": "auto",
       "total_num_steps": "auto"
     }
-  },
-
-  "activation_checkpointing": {
-    "partition_activations": false,
-    "cpu_checkpointing": false,
-    "contiguous_memory_optimization": false,
-    "number_checkpoints": null,
-    "synchronize_checkpoint_boundary": false,
-    "profile": false
   },
 
   "comms_logger": {
