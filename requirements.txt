@@ -1,0 +1,30 @@
+# Mythos v3 — Training dependencies
+# Install: pip install -r requirements_train.txt
+#
+# NOTE:
+# - These versions are pinned for a stable FlashAttention-compatible stack.
+# - CUDA toolkit should be 12.1/12.4 for best compatibility.
+
+# Core training stack
+torch==2.5.1
+transformers==4.47.1
+peft==0.13.2
+trl==0.12.2
+accelerate==1.1.1
+deepspeed==0.15.4
+
+# Flash attention (install via wheels when possible)
+flash-attn==2.7.4.post1
+
+# Data
+datasets==3.1.0
+
+# Utilities
+bitsandbytes==0.45.0
+sentencepiece==0.2.0
+protobuf==5.28.3
+packaging==24.2
+safetensors==0.4.5
+
+# Optional: experiment tracking
+# wandb==0.18.7
