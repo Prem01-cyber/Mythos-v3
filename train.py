@@ -128,6 +128,40 @@ def apply_chat_template(example: dict, tokenizer) -> dict:
     return {"text": text}
 
 
+def patch_causal_lm_loss() -> None:
+    """
+    Remove the explicit float32 upcast in transformers' ForCausalLMLoss.
+
+    Without this patch, transformers materialises a full float32 copy of the
+    logits tensor before computing cross-entropy.  At batch=48, seqlen=2048,
+    vocab=152 064 that allocation is ~57 GB in fp32 — enough to cause OOM even
+    on 140 GB GPUs.  PyTorch's CrossEntropyLoss kernel handles bf16 inputs
+    internally without materialising a separate fp32 copy, so dropping the
+    explicit cast is both safe and memory-efficient.
+    """
+    try:
+        import transformers.loss.loss_utils as _lu
+        from torch.nn import CrossEntropyLoss
+
+        def _bf16_causal_lm_loss(
+            logits, labels, vocab_size,
+            num_items_in_batch=None, ignore_index=-100, **kwargs
+        ):
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            loss_fct = CrossEntropyLoss(ignore_index=ignore_index)
+            loss = loss_fct(
+                shift_logits.view(-1, vocab_size),
+                shift_labels.view(-1).to(shift_logits.device),
+            )
+            return loss
+
+        _lu.ForCausalLMLoss = _bf16_causal_lm_loss
+        log.info("Loss patch applied: logits stay bf16 (no float32 upcast).")
+    except Exception as exc:
+        log.warning(f"Could not patch ForCausalLMLoss ({exc}). Reduce batch if OOM occurs.")
+
+
 def load_deepspeed_config(path: str) -> dict:
     """Load and sanitize DeepSpeed config for backward-compatible keys."""
     with open(path, "r", encoding="utf-8") as f:
@@ -176,6 +210,8 @@ class ProgressCallback(TrainerCallback):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
+    patch_causal_lm_loss()
+
     args = parse_args()
 
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
