@@ -1,30 +1,51 @@
 # Mythos v3 — Training dependencies
 #
 # Install order:
-#   1. pip install unsloth                              (pulls in compatible transformers/trl/peft)
-#   2. pip install "torch>=2.6.0" \
-#        --index-url https://download.pytorch.org/whl/cu124  (torchao 0.17+ needs torch>=2.6)
-#   3. pip install -r requirements.txt                  (pin remaining utilities)
+#   1. pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+#   2. pip install unsloth
+#   3. pip install -r requirements.txt
+#   4. pip install flash-attn==2.6.3 --no-build-isolation --no-cache-dir
 #
-# NOTE: Unsloth manages its own ecosystem — do NOT pin torch/transformers/trl/peft here
-#       to avoid conflicting with what Unsloth expects.
+# IMPORTANT: 
+#   - Use regular pip (NOT uv pip) for flash-attn
+#   - torch must be installed for CUDA 13.0 (cu130) to match system CUDA
+#   - Unsloth manages transformers/trl/peft versions - do NOT pin them here
+#   - flash-attn MUST be installed separately with --no-build-isolation flag
 
-# Data & utilities
-datasets>=4.0.0
-sentencepiece==0.2.0
-protobuf==5.28.3
-packaging>=24.0
-safetensors>=0.4.5
+# Core dependencies (Unsloth will install these, but pinning for reproducibility)
+torch>=2.10.0
+transformers>=5.0.0
+trl>=0.24.0
+peft>=0.19.0
+accelerate>=1.13.0
 
-# Data
-datasets==3.1.0
+# Data processing
+datasets==4.8.5
+sentencepiece==0.2.1
+protobuf==7.34.1
+pyarrow>=24.0.0
 
-# Utilities
-bitsandbytes==0.45.0
-sentencepiece==0.2.0
-protobuf==5.28.3
-packaging==24.2
-safetensors==0.4.5
+# Training utilities
+bitsandbytes==0.49.2
+safetensors==0.7.0
+packaging>=26.0
 
-# Optional: experiment tracking
-# wandb==0.18.7
+# DeepSpeed (for distributed training if needed)
+deepspeed>=0.19.0
+
+# Optional but recommended for better performance
+ninja>=1.11.0              # Speeds up flash-attn compilation
+xformers>=0.0.35           # Fallback if flash-attn fails
+
+# Development/logging (optional)
+# wandb>=0.17.0            # Experiment tracking
+# tensorboard>=2.15.0      # Alternative logging
+
+# NOTE: flash-attn is NOT listed here because it requires special installation:
+#   pip install flash-attn==2.6.3 --no-build-isolation --no-cache-dir
+#
+# Why not in requirements.txt?
+#   - Needs CUDA compilation during install
+#   - Requires --no-build-isolation flag
+#   - Must use regular pip (not uv pip)
+#   - Can fail on some systems, so we install it separately
