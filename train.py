@@ -75,6 +75,8 @@ def parse_args():
     p.add_argument("--seed",           type=int,   default=42)
     p.add_argument("--deepspeed",      default="deepspeed_zero2.json",
                    help="Path to DeepSpeed config (pass empty string to disable)")
+    p.add_argument("--local_rank",     type=int,   default=-1,
+                   help="Injected automatically by DeepSpeed launcher — do not set manually")
     return p.parse_args()
 
 
