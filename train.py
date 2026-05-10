@@ -7,6 +7,7 @@ Effective batch: 2 per GPU × 4 GPUs × 16 grad accum = 128
 Dataset split : 90 / 5 / 5  (train / val / test)
 """
 
+from torch._C import torch_dtype
 import argparse
 import json
 import logging
@@ -259,7 +260,7 @@ def main():
     log.info(f"Loading model: {args.model_id}")
     model = AutoModelForCausalLM.from_pretrained(
         args.model_id,
-        dtype=torch.bfloat16,
+        torch_dtype=torch.bfloat16,
         trust_remote_code=True,
         use_cache=False,          # must be False with gradient checkpointing
         attn_implementation="flash_attention_2",
