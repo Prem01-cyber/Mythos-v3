@@ -128,6 +128,23 @@ def apply_chat_template(example: dict, tokenizer) -> dict:
     return {"text": text}
 
 
+def load_deepspeed_config(path: str) -> dict:
+    """Load and sanitize DeepSpeed config for backward-compatible keys."""
+    with open(path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    zero_cfg = config.get("zero_optimization")
+    if isinstance(zero_cfg, dict):
+        # DeepSpeed rejects configs that specify both keys together.
+        if "offload_optimizer" in zero_cfg and "cpu_offload" in zero_cfg:
+            zero_cfg.pop("cpu_offload", None)
+            log.warning(
+                "DeepSpeed config had both 'cpu_offload' and 'offload_optimizer'; "
+                "removed deprecated 'cpu_offload'."
+            )
+    return config
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Callbacks
 # ─────────────────────────────────────────────────────────────────────────────
@@ -291,9 +308,16 @@ def main():
             log.info(f"GPU memory after model load: {allocated:.1f} GB")
 
     # ── Training arguments ─────────────────────────────────────────────────
-    ds_config = args.deepspeed if (args.deepspeed and Path(args.deepspeed).exists()) else None
-    if ds_config is None and args.deepspeed:
-        log.warning(f"DeepSpeed config '{args.deepspeed}' not found — running without DeepSpeed")
+    ds_config = None
+    if args.deepspeed:
+        if Path(args.deepspeed).exists():
+            try:
+                ds_config = load_deepspeed_config(args.deepspeed)
+            except Exception as e:
+                log.warning(f"Failed to load DeepSpeed config '{args.deepspeed}': {e}")
+                log.warning("Falling back to no DeepSpeed config")
+        else:
+            log.warning(f"DeepSpeed config '{args.deepspeed}' not found — running without DeepSpeed")
 
     sft_sig = inspect.signature(SFTConfig.__init__).parameters
     sft_kwargs = {
