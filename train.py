@@ -317,7 +317,7 @@ def main():
         "report_to": "none",
         "run_name": "mythos-v3",
         "remove_unused_columns": True,
-        "dataloader_num_workers": 4,
+        "dataloader_num_workers": 12,
         "dataloader_pin_memory": True,
     }
 

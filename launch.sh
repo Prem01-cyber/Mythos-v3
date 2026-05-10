@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
 #  Mythos v3 — Training launch script
-#  Config  : LoRA r=128 α=256 | Unsloth | single GPU | bf16
+#  Config  : LoRA r=128 α=256 | Unsloth | single GPU | bf16 | effective batch=128
 #  Dataset : training_data/  (90/5/5 train/val/test split)
 #
 #  Usage:
@@ -74,12 +74,11 @@ TRAIN_FILE="${SCRIPT_DIR}/training_data/train.jsonl"
 VAL_FILE="${SCRIPT_DIR}/training_data/val.jsonl"
 TEST_FILE="${SCRIPT_DIR}/training_data/test.jsonl"
 TOKENIZED_DIR="${SCRIPT_DIR}/tokenized_data"
-DS_CONFIG="${SCRIPT_DIR}/deepspeed_zero2.json"
 OUTPUT_DIR="${SCRIPT_DIR}/mythos-v3-lora"
 MERGED_DIR="${SCRIPT_DIR}/mythos-v3-merged"
 
-# ── Verify raw data and config exist ─────────────────────────────────────────
-for f in "$TRAIN_FILE" "$VAL_FILE" "$TEST_FILE" "$DS_CONFIG"; do
+# ── Verify raw data exist ────────────────────────────────────────────────────
+for f in "$TRAIN_FILE" "$VAL_FILE" "$TEST_FILE"; do
     if [ ! -f "$f" ]; then
         echo "ERROR: Required file not found: $f"
         exit 1
@@ -96,7 +95,7 @@ else
     python3 "${SCRIPT_DIR}/pretokenize.py" \
         --data-dir   "${SCRIPT_DIR}/training_data" \
         --output-dir "$TOKENIZED_DIR" \
-        --num-proc   6
+        --num-proc   16
     echo "  Pre-tokenization complete."
 fi
 
@@ -112,8 +111,8 @@ echo "  Tokenized dir  : $TOKENIZED_DIR"
 echo "  Output dir     : $OUTPUT_DIR"
 
 # ── Training math ────────────────────────────────────────────────────────────
-PER_GPU_BATCH=${PER_GPU_BATCH:-8}
-GRAD_ACCUM=${GRAD_ACCUM:-12}
+PER_GPU_BATCH=${PER_GPU_BATCH:-16}
+GRAD_ACCUM=${GRAD_ACCUM:-8}
 EPOCHS=3
 EFF_BATCH=$(python3 -c "print($PER_GPU_BATCH * $NUM_GPUS * $GRAD_ACCUM)")
 TOTAL_STEPS=$(python3 -c "import math; print(math.ceil($TRAIN_LINES / $EFF_BATCH) * $EPOCHS)")
@@ -121,7 +120,7 @@ TOTAL_STEPS=$(python3 -c "import math; print(math.ceil($TRAIN_LINES / $EFF_BATCH
 echo ""
 echo "=== Training configuration ==="
 echo "  Model          : Qwen/Qwen2.5-7B-Instruct"
-echo "  LoRA           : r=128  alpha=256  dropout=0.05"
+echo "  LoRA           : r=128  alpha=256  dropout=0.0"
 echo "  Per-GPU batch  : $PER_GPU_BATCH"
 echo "  Grad accumul.  : $GRAD_ACCUM"
 echo "  Effective batch: $EFF_BATCH"
@@ -131,7 +130,7 @@ echo "  Total steps    : ~$TOTAL_STEPS"
 echo "  Learning rate  : 2e-5  (cosine schedule)"
 echo "  Warmup steps   : 100"
 echo "  Precision      : BFloat16"
-echo "  ZeRO stage     : 2"
+echo "  Trainer        : Unsloth SFTTrainer"
 echo ""
 
 # ── Launch ────────────────────────────────────────────────────────────────────
@@ -149,7 +148,7 @@ python3 "${SCRIPT_DIR}/train.py" \
     --merged-dir "$MERGED_DIR" \
     --lora-r 128 \
     --lora-alpha 256 \
-    --lora-dropout 0.05 \
+    --lora-dropout 0.0 \
     --epochs "$EPOCHS" \
     --lr 2e-5 \
     --per-gpu-batch "$PER_GPU_BATCH" \
