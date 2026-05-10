@@ -98,7 +98,7 @@ else
     python3 "${SCRIPT_DIR}/pretokenize.py" \
         --data-dir   "${SCRIPT_DIR}/training_data" \
         --output-dir "$TOKENIZED_DIR" \
-        --num-proc   8
+        --num-proc   6
     echo "  Pre-tokenization complete."
 fi
 
@@ -114,8 +114,8 @@ echo "  Tokenized dir  : $TOKENIZED_DIR"
 echo "  Output dir     : $OUTPUT_DIR"
 
 # ── Training math ────────────────────────────────────────────────────────────
-PER_GPU_BATCH=${PER_GPU_BATCH:-16}
-GRAD_ACCUM=${GRAD_ACCUM:-6}
+PER_GPU_BATCH=${PER_GPU_BATCH:-4}
+GRAD_ACCUM=${GRAD_ACCUM:-24}
 EPOCHS=3
 EFF_BATCH=$(python3 -c "print($PER_GPU_BATCH * $NUM_GPUS * $GRAD_ACCUM)")
 TOTAL_STEPS=$(python3 -c "import math; print(math.ceil($TRAIN_LINES / $EFF_BATCH) * $EPOCHS)")

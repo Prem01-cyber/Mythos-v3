@@ -396,7 +396,7 @@ def main():
         "report_to": "none",   # change to "wandb" if needed
         "run_name": "mythos-v3",
         "remove_unused_columns": True,
-        "dataloader_num_workers": 16,
+        "dataloader_num_workers": 4,
         "dataloader_pin_memory": True,
         "ddp_find_unused_parameters": False,
     }
