@@ -133,7 +133,7 @@ def apply_chat_template(example: dict, tokenizer) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ProgressCallback(TrainerCallback):
-    """Logs step timing and ETA."""
+    """Logs step timing, ETA, and VRAM usage."""
     def __init__(self):
         self._last_log = {}
 
@@ -148,6 +148,10 @@ class ProgressCallback(TrainerCallback):
         if isinstance(lr, float):
             lr = f"{lr:.2e}"
         log.info(f"Step {step}/{total} ({pct:.1f}%) | loss={loss} | lr={lr}")
+        if step % 10 == 0 and torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated() / 1024**3
+            reserved  = torch.cuda.memory_reserved()  / 1024**3
+            log.info(f"  VRAM: {allocated:.1f} GB allocated / {reserved:.1f} GB reserved")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -321,7 +325,7 @@ def main():
         "report_to": "none",   # change to "wandb" if needed
         "run_name": "mythos-v3",
         "remove_unused_columns": True,
-        "dataloader_num_workers": 4,
+        "dataloader_num_workers": 16,
         "dataloader_pin_memory": True,
         "ddp_find_unused_parameters": False,
     }
