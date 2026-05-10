@@ -8,6 +8,7 @@ Dataset split : 90 / 5 / 5  (train / val / test)
 """
 
 import argparse
+import inspect
 import json
 import logging
 import math
@@ -290,55 +291,66 @@ def main():
     if ds_config is None and args.deepspeed:
         log.warning(f"DeepSpeed config '{args.deepspeed}' not found — running without DeepSpeed")
 
-    training_args = SFTConfig(
-        output_dir=args.output_dir,
-        num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.per_gpu_batch,
-        per_device_eval_batch_size=args.per_gpu_batch,
-        gradient_accumulation_steps=args.grad_accum,
-        learning_rate=args.lr,
-        lr_scheduler_type="cosine",
-        warmup_steps=args.warmup_steps,
-        bf16=True,
-        fp16=False,
-        gradient_checkpointing=True,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
-        # ── Sequence & packing ──────────────────────────────────────────────
-        max_length=args.max_seq_len,           # renamed from max_seq_length
-        packing=True,                          # fill sequences to max_length
-        packing_strategy="bfd",                # best-fit decreasing (default)
-        dataset_text_field="text",
-        dataset_num_proc=8,
-        # ── Loss: train on assistant turns only ─────────────────────────────
-        assistant_only_loss=True,              # ignore system+user tokens in loss
-        # ── Logging & saving ────────────────────────────────────────────────
-        logging_steps=args.log_steps,
-        logging_first_step=True,
-        save_steps=args.save_steps,
-        save_total_limit=3,
-        eval_strategy="steps",
-        eval_steps=args.eval_steps,
-        load_best_model_at_end=True,
-        metric_for_best_model="eval_loss",
-        greater_is_better=False,
-        # ── Reproducibility ─────────────────────────────────────────────────
-        seed=args.seed,
-        data_seed=args.seed,
-        # ── Optimizer ───────────────────────────────────────────────────────
-        optim="adamw_torch_fused",
-        weight_decay=0.01,
-        max_grad_norm=1.0,
-        # ── DeepSpeed ───────────────────────────────────────────────────────
-        deepspeed=ds_config,
-        # ── Reporting ───────────────────────────────────────────────────────
-        report_to="none",          # change to "wandb" if you want W&B tracking
-        run_name="mythos-v3",
-        # ── Misc ────────────────────────────────────────────────────────────
-        remove_unused_columns=True,
-        dataloader_num_workers=4,
-        dataloader_pin_memory=True,
-        ddp_find_unused_parameters=False,
-    )
+    sft_sig = inspect.signature(SFTConfig.__init__).parameters
+    sft_kwargs = {
+        "output_dir": args.output_dir,
+        "num_train_epochs": args.epochs,
+        "per_device_train_batch_size": args.per_gpu_batch,
+        "per_device_eval_batch_size": args.per_gpu_batch,
+        "gradient_accumulation_steps": args.grad_accum,
+        "learning_rate": args.lr,
+        "lr_scheduler_type": "cosine",
+        "warmup_steps": args.warmup_steps,
+        "bf16": True,
+        "fp16": False,
+        "gradient_checkpointing": True,
+        "logging_steps": args.log_steps,
+        "logging_first_step": True,
+        "save_steps": args.save_steps,
+        "save_total_limit": 3,
+        "eval_steps": args.eval_steps,
+        "load_best_model_at_end": True,
+        "metric_for_best_model": "eval_loss",
+        "greater_is_better": False,
+        "seed": args.seed,
+        "data_seed": args.seed,
+        "optim": "adamw_torch_fused",
+        "weight_decay": 0.01,
+        "max_grad_norm": 1.0,
+        "deepspeed": ds_config,
+        "report_to": "none",   # change to "wandb" if needed
+        "run_name": "mythos-v3",
+        "remove_unused_columns": True,
+        "dataloader_num_workers": 4,
+        "dataloader_pin_memory": True,
+        "ddp_find_unused_parameters": False,
+    }
+
+    # Version-specific compatibility across TRL/Transformers releases.
+    if "gradient_checkpointing_kwargs" in sft_sig:
+        sft_kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
+    if "max_length" in sft_sig:
+        sft_kwargs["max_length"] = args.max_seq_len
+    elif "max_seq_length" in sft_sig:
+        sft_kwargs["max_seq_length"] = args.max_seq_len
+    if "dataset_text_field" in sft_sig:
+        sft_kwargs["dataset_text_field"] = "text"
+    if "dataset_num_proc" in sft_sig:
+        sft_kwargs["dataset_num_proc"] = 8
+    if "packing" in sft_sig:
+        sft_kwargs["packing"] = True
+    if "packing_strategy" in sft_sig:
+        sft_kwargs["packing_strategy"] = "bfd"
+    if "assistant_only_loss" in sft_sig:
+        sft_kwargs["assistant_only_loss"] = True
+    if "eval_strategy" in sft_sig:
+        sft_kwargs["eval_strategy"] = "steps"
+    elif "evaluation_strategy" in sft_sig:
+        sft_kwargs["evaluation_strategy"] = "steps"
+
+    # Keep only kwargs accepted by this installed SFTConfig.
+    sft_kwargs = {k: v for k, v in sft_kwargs.items() if k in sft_sig}
+    training_args = SFTConfig(**sft_kwargs)
 
     # ── Trainer ────────────────────────────────────────────────────────────
     trainer = SFTTrainer(
