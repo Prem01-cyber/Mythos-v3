@@ -334,8 +334,8 @@ def main():
         sft_kwargs["packing"] = True
     if "packing_strategy" in sft_sig:
         sft_kwargs["packing_strategy"] = "bfd"
-    if "assistant_only_loss" in sft_sig:
-        sft_kwargs["assistant_only_loss"] = True
+    # assistant_only_loss requires a `messages` column (conversational format).
+    # Our dataset is pre-formatted text via pretokenize.py, so skip this.
     if "eval_strategy" in sft_sig:
         sft_kwargs["eval_strategy"] = "steps"
     elif "evaluation_strategy" in sft_sig:
