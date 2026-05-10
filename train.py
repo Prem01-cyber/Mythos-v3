@@ -6,6 +6,9 @@ Configuration: LoRA r=128 α=256 | Unsloth | single GPU | bf16
 Dataset split : 90 / 5 / 5  (train / val / test)
 """
 
+# Unsloth must be imported before transformers/trl/peft to apply all optimisations
+from unsloth import FastLanguageModel
+
 import argparse
 import inspect
 import json
@@ -18,7 +21,6 @@ import torch
 from datasets import Dataset, load_from_disk
 from transformers import TrainerCallback
 from trl import SFTConfig, SFTTrainer
-from unsloth import FastLanguageModel
 
 logging.basicConfig(
     level=logging.INFO,
@@ -183,7 +185,19 @@ def main():
         dtype=torch.bfloat16,
         load_in_4bit=False,
     )
-    if tokenizer.pad_token is None:
+
+    # TRL 0.24+ validates that eos_token exists in the vocabulary.
+    # Unsloth/Qwen2 may leave a generic '<EOS_TOKEN>' placeholder; replace
+    # it with the actual end-of-turn token so SFTTrainer does not reject it.
+    vocab = tokenizer.get_vocab()
+    if tokenizer.eos_token not in vocab:
+        for candidate in ("<|im_end|>", "<|endoftext|>"):
+            if candidate in vocab:
+                tokenizer.eos_token = candidate
+                tokenizer.eos_token_id = vocab[candidate]
+                log.info(f"Reset eos_token to '{candidate}' (was not in vocabulary).")
+                break
+    if tokenizer.pad_token is None or tokenizer.pad_token not in vocab:
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
@@ -253,12 +267,14 @@ def main():
 
     # ── LoRA (Unsloth-optimised) ───────────────────────────────────────────
     log.info(f"Applying LoRA: r={args.lora_r}, alpha={args.lora_alpha}")
+    # lora_dropout must be 0 for Unsloth to patch LoRA matrices with fast kernels.
+    # Non-zero dropout falls back to standard PEFT paths (still correct, just slower).
     model = FastLanguageModel.get_peft_model(
         model,
         r=args.lora_r,
         target_modules=QWEN_LORA_TARGETS,
         lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
+        lora_dropout=0,
         bias="none",
         use_gradient_checkpointing="unsloth",
         random_state=args.seed,
