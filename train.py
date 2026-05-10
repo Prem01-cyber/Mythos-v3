@@ -262,6 +262,7 @@ def main():
         dtype=torch.bfloat16,
         trust_remote_code=True,
         use_cache=False,          # must be False with gradient checkpointing
+        attn_implementation="flash_attention_2",
     )
 
     # ── LoRA ───────────────────────────────────────────────────────────────

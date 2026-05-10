@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
 #  Mythos v3 — Training launch script
-#  Config  : LoRA r=128 α=256 | ZeRO-2 | 2×GPU | bf16 | effective batch=128 | no CPU offload
+#  Config  : LoRA r=128 α=256 | ZeRO-2 | 1×GPU | bf16 | flash-attn | effective batch=128 | no CPU offload
 #  Dataset : training_data/  (90/5/5 train/val/test split)
 #
 #  Usage:
@@ -22,7 +22,7 @@ export TOKENIZERS_PARALLELISM=false
 export WANDB_DISABLED=true
 
 # ── GPU configuration ─────────────────────────────────────────────────────────
-NUM_GPUS=${NUM_GPUS:-2}
+NUM_GPUS=${NUM_GPUS:-1}
 
 # Verify GPU count
 AVAILABLE_GPUS=$(python3 -c "import torch; print(torch.cuda.device_count())")
@@ -50,7 +50,7 @@ for i in range(torch.cuda.device_count()):
         print(f"    WARNING: GPU {i} has < 20GB. Consider smaller batch or ZeRO-3.")
 
 # Check packages
-required = ["peft", "trl", "deepspeed"]
+required = ["peft", "trl", "deepspeed", "flash_attn"]
 missing = []
 for pkg in required:
     try:
@@ -112,7 +112,7 @@ echo "  Output dir     : $OUTPUT_DIR"
 
 # ── Training math ────────────────────────────────────────────────────────────
 PER_GPU_BATCH=4
-GRAD_ACCUM=16
+GRAD_ACCUM=32
 EPOCHS=3
 EFF_BATCH=$(python3 -c "print($PER_GPU_BATCH * $NUM_GPUS * $GRAD_ACCUM)")
 TOTAL_STEPS=$(python3 -c "import math; print(math.ceil($TRAIN_LINES / $EFF_BATCH) * $EPOCHS)")
