@@ -17,12 +17,10 @@ export PYTHONUNBUFFERED=1
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 export CUDA_LAUNCH_BLOCKING=0
-export NCCL_DEBUG=WARN
 
-# Uncomment if using WandB:
+# Uncomment to enable WandB:
 # export WANDB_PROJECT="mythos-v3"
-# export WANDB_RUN_NAME="lora-r128-zero2"
-export WANDB_DISABLED=true
+# export WANDB_RUN_NAME="lora-r128-unsloth"
 
 # ── GPU configuration ─────────────────────────────────────────────────────────
 NUM_GPUS=${NUM_GPUS:-1}
@@ -53,7 +51,7 @@ for i in range(torch.cuda.device_count()):
         print(f"    WARNING: GPU {i} has < 20GB. Consider smaller batch or ZeRO-3.")
 
 # Check packages
-required = ["peft", "trl", "deepspeed", "flash_attn"]
+required = ["unsloth", "trl"]
 missing = []
 for pkg in required:
     try:
