@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
 #  Mythos v3 — Training launch script
-#  Config  : LoRA r=128 α=256 | ZeRO-2 | 1×GPU | bf16 | flash-attn | effective batch=128 | no CPU offload
+#  Config  : LoRA r=128 α=256 | ZeRO-2 | bf16 | flash-attn | no CPU offload
 #  Dataset : training_data/  (90/5/5 train/val/test split)
 #
 #  Usage:
@@ -48,7 +48,7 @@ import torch, sys
 for i in range(torch.cuda.device_count()):
     props = torch.cuda.get_device_properties(i)
     mem_gb = props.total_memory / 1024**3
-    print(f"  GPU {i}: {props.name} — {mem_gb:.1f} GB")
+    print(f"  GPU {i}: {mem_gb:.1f} GB")
     if mem_gb < 20:
         print(f"    WARNING: GPU {i} has < 20GB. Consider smaller batch or ZeRO-3.")
 
@@ -114,8 +114,8 @@ echo "  Tokenized dir  : $TOKENIZED_DIR"
 echo "  Output dir     : $OUTPUT_DIR"
 
 # ── Training math ────────────────────────────────────────────────────────────
-PER_GPU_BATCH=128
-GRAD_ACCUM=1
+PER_GPU_BATCH=${PER_GPU_BATCH:-96}
+GRAD_ACCUM=${GRAD_ACCUM:-1}
 EPOCHS=3
 EFF_BATCH=$(python3 -c "print($PER_GPU_BATCH * $NUM_GPUS * $GRAD_ACCUM)")
 TOTAL_STEPS=$(python3 -c "import math; print(math.ceil($TRAIN_LINES / $EFF_BATCH) * $EPOCHS)")
