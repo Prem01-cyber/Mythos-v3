@@ -114,6 +114,7 @@ echo "  Output dir     : $OUTPUT_DIR"
 
 # ── Training math ────────────────────────────────────────────────────────────
 PER_GPU_BATCH=${PER_GPU_BATCH:-16}
+PER_GPU_EVAL_BATCH=${PER_GPU_EVAL_BATCH:-1}
 GRAD_ACCUM=${GRAD_ACCUM:-8}
 EPOCHS=3
 EFF_BATCH=$(python3 -c "print($PER_GPU_BATCH * $NUM_GPUS * $GRAD_ACCUM)")
@@ -124,6 +125,7 @@ echo "=== Training configuration ==="
 echo "  Model          : $MODEL_ID"
 echo "  LoRA           : r=128  alpha=256  dropout=0.0"
 echo "  Per-GPU batch  : $PER_GPU_BATCH"
+echo "  Eval batch     : $PER_GPU_EVAL_BATCH"
 echo "  Grad accumul.  : $GRAD_ACCUM"
 echo "  Effective batch: $EFF_BATCH"
 echo "  GPUs           : $NUM_GPUS"
@@ -154,6 +156,7 @@ python3 "${SCRIPT_DIR}/train.py" \
     --epochs "$EPOCHS" \
     --lr 2e-5 \
     --per-gpu-batch "$PER_GPU_BATCH" \
+    --per-gpu-eval-batch "$PER_GPU_EVAL_BATCH" \
     --grad-accum "$GRAD_ACCUM" \
     --max-seq-len 2048 \
     --warmup-steps 100 \

@@ -55,6 +55,8 @@ def parse_args():
     p.add_argument("--epochs",         type=int,   default=3)
     p.add_argument("--lr",             type=float, default=2e-5)
     p.add_argument("--per-gpu-batch",  type=int,   default=2)
+    p.add_argument("--per-gpu-eval-batch", type=int, default=1,
+                   help="Eval micro-batch per GPU (keep small to avoid eval OOM)")
     p.add_argument("--grad-accum",     type=int,   default=16)
     p.add_argument("--max-seq-len",    type=int,   default=2048,
                    help="Max sequence length (maps to SFTConfig.max_length)")
@@ -293,7 +295,7 @@ def main():
         "output_dir": args.output_dir,
         "num_train_epochs": args.epochs,
         "per_device_train_batch_size": args.per_gpu_batch,
-        "per_device_eval_batch_size": args.per_gpu_batch,
+        "per_device_eval_batch_size": args.per_gpu_eval_batch,
         "gradient_accumulation_steps": args.grad_accum,
         "learning_rate": args.lr,
         "lr_scheduler_type": "cosine",
@@ -334,6 +336,9 @@ def main():
         sft_kwargs["packing"] = True
     if "packing_strategy" in sft_sig:
         sft_kwargs["packing_strategy"] = "bfd"
+    # Avoid storing/returning eval logits; this prevents large fp32 casts in eval.
+    if "prediction_loss_only" in sft_sig:
+        sft_kwargs["prediction_loss_only"] = True
     # assistant_only_loss requires a `messages` column (conversational format).
     # Our dataset is pre-formatted text via pretokenize.py, so skip this.
     if "eval_strategy" in sft_sig:
