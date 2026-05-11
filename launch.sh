@@ -76,6 +76,7 @@ TEST_FILE="${SCRIPT_DIR}/training_data/test.jsonl"
 TOKENIZED_DIR="${SCRIPT_DIR}/tokenized_data"
 OUTPUT_DIR="${SCRIPT_DIR}/mythos-v3-lora"
 MERGED_DIR="${SCRIPT_DIR}/mythos-v3-merged"
+MODEL_ID=${MODEL_ID:-"Qwen/Qwen2.5-1.5B-Instruct"}
 
 # ── Verify raw data exist ────────────────────────────────────────────────────
 for f in "$TRAIN_FILE" "$VAL_FILE" "$TEST_FILE"; do
@@ -93,6 +94,7 @@ if [ -d "${TOKENIZED_DIR}/train" ] && [ -d "${TOKENIZED_DIR}/val" ]; then
 else
     echo "  Running pretokenize.py (this takes ~5-10 min, only needed once)..."
     python3 "${SCRIPT_DIR}/pretokenize.py" \
+        --model-id  "$MODEL_ID" \
         --data-dir   "${SCRIPT_DIR}/training_data" \
         --output-dir "$TOKENIZED_DIR" \
         --num-proc   16
@@ -119,7 +121,7 @@ TOTAL_STEPS=$(python3 -c "import math; print(math.ceil($TRAIN_LINES / $EFF_BATCH
 
 echo ""
 echo "=== Training configuration ==="
-echo "  Model          : Qwen/Qwen2.5-7B-Instruct"
+echo "  Model          : $MODEL_ID"
 echo "  LoRA           : r=128  alpha=256  dropout=0.0"
 echo "  Per-GPU batch  : $PER_GPU_BATCH"
 echo "  Grad accumul.  : $GRAD_ACCUM"
@@ -139,7 +141,7 @@ echo "$(date)"
 echo ""
 
 python3 "${SCRIPT_DIR}/train.py" \
-    --model-id "Qwen/Qwen2.5-7B-Instruct" \
+    --model-id "$MODEL_ID" \
     --train-file "$TRAIN_FILE" \
     --val-file "$VAL_FILE" \
     --test-file "$TEST_FILE" \

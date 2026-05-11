@@ -50,7 +50,7 @@ def load_jsonl(path: Path, max_samples: int | None = None) -> list[dict]:
 
 def parse_args():
     p = argparse.ArgumentParser(description="Pre-format Mythos v3 data")
-    p.add_argument("--model-id",    default="Qwen/Qwen2.5-7B-Instruct",
+    p.add_argument("--model-id",    default="Qwen/Qwen2.5-1.5B-Instruct",
                    help="HuggingFace model ID (needed for tokenizer / chat template)")
     p.add_argument("--data-dir",    default="./training_data",
                    help="Directory containing train.jsonl, val.jsonl, test.jsonl")
