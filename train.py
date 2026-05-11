@@ -69,6 +69,8 @@ def parse_args():
     p.add_argument("--max-val-samples",   type=int, default=5000)
     p.add_argument("--max-test-samples",  type=int, default=None,
                    help="Cap test examples for final evaluation (default: full test set)")
+    p.add_argument("--skip-final-test-eval", action="store_true",
+                   help="Skip held-out test evaluation after training (useful for quick smoke runs)")
     p.add_argument("--seed",           type=int,   default=42)
     p.add_argument("--tokenized-dir",  default="./tokenized_data",
                    help="Directory of pre-formatted Arrow datasets (from pretokenize.py). "
@@ -118,6 +120,33 @@ def apply_chat_template(example: dict, tokenizer) -> dict:
         add_generation_prompt=False,
     )
     return {"text": text}
+
+
+def tokenize_text_dataset(ds: Dataset, tokenizer, max_seq_len: int, num_proc: int = 4) -> Dataset:
+    """Tokenize a dataset that has a `text` column into input_ids for eval."""
+    cols = set(ds.column_names)
+    if "input_ids" in cols:
+        return ds
+    if "text" not in cols:
+        raise ValueError(
+            f"Expected dataset with 'text' or 'input_ids' columns, got: {sorted(cols)}"
+        )
+
+    def _tok(batch):
+        return tokenizer(
+            batch["text"],
+            truncation=True,
+            max_length=max_seq_len,
+            padding=False,
+        )
+
+    return ds.map(
+        _tok,
+        batched=True,
+        num_proc=num_proc,
+        remove_columns=ds.column_names,
+        desc="Tokenize test",
+    )
 
 
 
@@ -374,7 +403,13 @@ def main():
     trainer.train(resume_from_checkpoint=resume)
 
     # ── Evaluate on held-out test set (run once, after best model selected) ─
-    if test_ds is not None:
+    if test_ds is not None and not args.skip_final_test_eval:
+        # SFTTrainer preprocesses its internal eval_dataset (val) during init, but
+        # this explicit eval_dataset override must already contain input_ids.
+        if "input_ids" not in test_ds.column_names:
+            log.info("Tokenizing held-out TEST split for final evaluation...")
+            test_ds = tokenize_text_dataset(test_ds, tokenizer, args.max_seq_len, num_proc=4)
+
         log.info("=" * 60)
         log.info("Running final evaluation on held-out TEST set...")
         log.info("=" * 60)
@@ -390,6 +425,8 @@ def main():
             with open(metrics_path, "w") as f:
                 json.dump(test_metrics, f, indent=2)
             log.info(f"Test metrics saved to {metrics_path}")
+    elif args.skip_final_test_eval:
+        log.info("Skipping held-out TEST evaluation (--skip-final-test-eval enabled).")
 
     # ── Save final adapter ─────────────────────────────────────────────────
     if is_main:
