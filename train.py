@@ -351,6 +351,11 @@ def main():
     log.info(f"Applying LoRA: r={args.lora_r}, alpha={args.lora_alpha}")
     # lora_dropout must be 0 for Unsloth to patch LoRA matrices with fast kernels.
     # Non-zero dropout falls back to standard PEFT paths (still correct, just slower).
+    #
+    # use_gradient_checkpointing=True  → standard in-GPU activation recompute (no PCIe traffic).
+    # use_gradient_checkpointing="unsloth" → offloads embedding gradients to CPU every backward
+    #   pass ("smart offload"); saves ~500 MB VRAM but causes 9-16 GB/s PCIe spikes that inflate
+    #   step time from ~10s to ~40s on an 80GB GPU where that VRAM saving is irrelevant.
     model = FastLanguageModel.get_peft_model(
         model,
         r=args.lora_r,
@@ -358,7 +363,7 @@ def main():
         lora_alpha=args.lora_alpha,
         lora_dropout=0,
         bias="none",
-        use_gradient_checkpointing="unsloth",
+        use_gradient_checkpointing=True,
         random_state=args.seed,
     )
 

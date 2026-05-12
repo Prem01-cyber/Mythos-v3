@@ -17,6 +17,9 @@ export PYTHONUNBUFFERED=1
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 export CUDA_LAUNCH_BLOCKING=0
+# Prevent Unsloth from auto-enabling its "smart offload" which moves embedding gradients
+# to CPU RAM every backward pass, causing 9-16 GB/s PCIe spikes and ~4x slower steps.
+export UNSLOTH_DISABLE_SMART_OFFLOAD=1
 
 # Uncomment to enable WandB:
 # export WANDB_PROJECT="mythos-v3"
