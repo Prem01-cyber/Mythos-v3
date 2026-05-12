@@ -1,0 +1,23 @@
+# Mythos v3 — Evaluation dependencies
+# Install with: pip install -r eval/requirements_eval.txt
+#
+# NOTE: vLLM must be installed SEPARATELY first because it pins torch version:
+#   pip install vllm
+# Then:
+#   pip install -r eval/requirements_eval.txt
+
+# ── Inference ─────────────────────────────────────────────────────────────────
+# vLLM: fast LLM inference (PagedAttention, tensor parallel, CUDA graphs)
+# Install separately: pip install vllm
+# Requires CUDA 12.1+ and Python 3.9+
+
+# ── Model / tokenizer ─────────────────────────────────────────────────────────
+transformers>=4.47.0
+accelerate>=0.34.0
+
+# ── Dataset loading (SecBench from HuggingFace) ───────────────────────────────
+datasets>=2.20.0
+huggingface_hub>=0.24.0
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+tqdm>=4.66.0
