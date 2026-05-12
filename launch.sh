@@ -77,6 +77,9 @@ TOKENIZED_DIR="${SCRIPT_DIR}/tokenized_data"
 OUTPUT_DIR="${SCRIPT_DIR}/mythos-v3-lora"
 MERGED_DIR="${SCRIPT_DIR}/mythos-v3-merged"
 MODEL_ID=${MODEL_ID:-"Qwen/Qwen2.5-1.5B-Instruct"}
+MAX_SEQ_LEN=${MAX_SEQ_LEN:-2048}   # must match --max-seq-len passed to train.py below
+LORA_R=${LORA_R:-64}               # 64 = fast+quality, 128 = max capacity (marginal gain, +3% FLOPs)
+LORA_ALPHA=${LORA_ALPHA:-128}      # keep alpha = 2 × r (standard scaling)
 
 # ── Verify raw data exist ────────────────────────────────────────────────────
 for f in "$TRAIN_FILE" "$VAL_FILE" "$TEST_FILE"; do
@@ -86,19 +89,33 @@ for f in "$TRAIN_FILE" "$VAL_FILE" "$TEST_FILE"; do
     fi
 done
 
-# ── Pre-tokenization (run once, skipped automatically on subsequent runs) ─────
+# ── Pre-tokenization + packing (run once; skipped automatically after first run) ─
 echo ""
-echo "=== Pre-tokenization ==="
-if [ -d "${TOKENIZED_DIR}/train" ] && [ -d "${TOKENIZED_DIR}/val" ]; then
-    echo "  Pre-formatted data found at ${TOKENIZED_DIR} — skipping"
+echo "=== Pre-tokenization + Packing ==="
+PACKED_META="${TOKENIZED_DIR}/packed_metadata.json"
+
+# Check whether a valid packed cache already exists for the current seq_len
+NEED_PACK=true
+if [ -f "$PACKED_META" ]; then
+    CACHED_SEQLEN=$(python3 -c "import json; print(json.load(open('$PACKED_META'))['max_seq_len'])" 2>/dev/null || echo 0)
+    if [ "$CACHED_SEQLEN" = "$MAX_SEQ_LEN" ] \
+       && [ -d "${TOKENIZED_DIR}/train_packed" ] \
+       && [ -d "${TOKENIZED_DIR}/val_packed" ]; then
+        NEED_PACK=false
+    fi
+fi
+
+if [ "$NEED_PACK" = "false" ]; then
+    echo "  Pre-packed data found (seq_len=${MAX_SEQ_LEN}) — skipping"
 else
-    echo "  Running pretokenize.py (this takes ~5-10 min, only needed once)..."
+    echo "  Running pretokenize.py  (text format + packing; ~10-20 min, only needed once per seq_len)..."
     python3 "${SCRIPT_DIR}/pretokenize.py" \
-        --model-id  "$MODEL_ID" \
+        --model-id   "$MODEL_ID" \
         --data-dir   "${SCRIPT_DIR}/training_data" \
         --output-dir "$TOKENIZED_DIR" \
-        --num-proc   16
-    echo "  Pre-tokenization complete."
+        --num-proc   16 \
+        --max-seq-len "$MAX_SEQ_LEN"
+    echo "  Pre-tokenization + packing complete."
 fi
 
 TRAIN_LINES=$(wc -l < "$TRAIN_FILE")
@@ -123,7 +140,7 @@ TOTAL_STEPS=$(python3 -c "import math; print(math.ceil($TRAIN_LINES / $EFF_BATCH
 echo ""
 echo "=== Training configuration ==="
 echo "  Model          : $MODEL_ID"
-echo "  LoRA           : r=128  alpha=256  dropout=0.0"
+echo "  LoRA           : r=${LORA_R}  alpha=${LORA_ALPHA}  dropout=0.0"
 echo "  Per-GPU batch  : $PER_GPU_BATCH"
 echo "  Eval batch     : $PER_GPU_EVAL_BATCH"
 echo "  Grad accumul.  : $GRAD_ACCUM"
@@ -133,8 +150,9 @@ echo "  Epochs         : $EPOCHS"
 echo "  Total steps    : ~$TOTAL_STEPS"
 echo "  Learning rate  : 2e-5  (cosine schedule)"
 echo "  Warmup steps   : 100"
+echo "  Max seq len    : $MAX_SEQ_LEN"
 echo "  Precision      : BFloat16"
-echo "  Trainer        : Unsloth SFTTrainer"
+echo "  Trainer        : Unsloth SFTTrainer (pre-packed input_ids)"
 echo ""
 
 # ── Launch ────────────────────────────────────────────────────────────────────
@@ -150,15 +168,15 @@ python3 "${SCRIPT_DIR}/train.py" \
     --tokenized-dir "$TOKENIZED_DIR" \
     --output-dir "$OUTPUT_DIR" \
     --merged-dir "$MERGED_DIR" \
-    --lora-r 128 \
-    --lora-alpha 256 \
+    --lora-r "$LORA_R" \
+    --lora-alpha "$LORA_ALPHA" \
     --lora-dropout 0.0 \
     --epochs "$EPOCHS" \
     --lr 2e-5 \
     --per-gpu-batch "$PER_GPU_BATCH" \
     --per-gpu-eval-batch "$PER_GPU_EVAL_BATCH" \
     --grad-accum "$GRAD_ACCUM" \
-    --max-seq-len 2048 \
+    --max-seq-len "$MAX_SEQ_LEN" \
     --warmup-steps 100 \
     --save-steps 500 \
     --eval-steps 500 \

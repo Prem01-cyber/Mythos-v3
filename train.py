@@ -234,14 +234,64 @@ def main():
 
     # ── Datasets ───────────────────────────────────────────────────────────
     tok_dir = Path(args.tokenized_dir)
-    use_pretokenized = (
+
+    # Priority 1: pre-packed data — skip SFTTrainer tokenisation AND packing
+    use_packed = False
+    packed_meta_path = tok_dir / "packed_metadata.json"
+    if (
+        tok_dir.exists()
+        and (tok_dir / "train_packed").exists()
+        and (tok_dir / "val_packed").exists()
+        and packed_meta_path.exists()
+    ):
+        meta = json.loads(packed_meta_path.read_text())
+        if meta.get("max_seq_len") == args.max_seq_len:
+            use_packed = True
+        else:
+            log.warning(
+                f"Packed data seq_len={meta['max_seq_len']} != --max-seq-len={args.max_seq_len}. "
+                "Falling back to text format. Re-run pretokenize.py with matching --max-seq-len."
+            )
+
+    # Priority 2: pre-formatted text data — skip chat-template map but SFTTrainer still packs
+    use_text_cache = not use_packed and (
         tok_dir.exists()
         and (tok_dir / "train").exists()
         and (tok_dir / "val").exists()
     )
 
-    if use_pretokenized:
-        log.info(f"Loading pre-formatted datasets from {tok_dir} ...")
+    if use_packed:
+        log.info(f"Loading pre-PACKED datasets from {tok_dir} (zero startup tokenisation/packing) ...")
+        train_ds = load_from_disk(str(tok_dir / "train_packed"))
+        val_ds   = load_from_disk(str(tok_dir / "val_packed"))
+
+        if args.max_train_samples:
+            train_ds = train_ds.select(range(min(args.max_train_samples, len(train_ds))))
+        if args.max_val_samples:
+            val_ds = val_ds.select(range(min(args.max_val_samples, len(val_ds))))
+
+        test_ds = None
+        test_pack = tok_dir / "test_packed"
+        test_text = tok_dir / "test"
+        if test_pack.exists():
+            test_ds = load_from_disk(str(test_pack))
+            if args.max_test_samples:
+                test_ds = test_ds.select(range(min(args.max_test_samples, len(test_ds))))
+        elif test_text.exists():
+            log.info("  test_packed not found — will tokenise test split on the fly for eval")
+            test_ds = load_from_disk(str(test_text))
+            if args.max_test_samples:
+                test_ds = test_ds.select(range(min(args.max_test_samples, len(test_ds))))
+        else:
+            log.warning("No pre-formatted test split found — skipping final test eval")
+
+        log.info(f"  train : {len(train_ds):,} packed chunks  (input_ids ready)")
+        log.info(f"  val   : {len(val_ds):,} packed chunks  (input_ids ready)")
+        if test_ds is not None:
+            log.info(f"  test  : {len(test_ds):,} examples")
+
+    elif use_text_cache:
+        log.info(f"Loading pre-formatted TEXT datasets from {tok_dir} ...")
         train_ds = load_from_disk(str(tok_dir / "train"))
         val_ds   = load_from_disk(str(tok_dir / "val"))
 
@@ -263,9 +313,10 @@ def main():
         log.info(f"  val   : {len(val_ds):,} examples")
         if test_ds is not None:
             log.info(f"  test  : {len(test_ds):,} examples")
+        log.info("  Tip: run pretokenize.py to generate packed data and eliminate packing overhead")
 
     else:
-        log.info(f"Pre-formatted data not found at {tok_dir} — applying chat template on the fly")
+        log.info(f"No cached data found at {tok_dir} — applying chat template on the fly")
         log.info("  (Run pretokenize.py once to speed up future starts)")
 
         log.info("Loading datasets...")
@@ -357,14 +408,28 @@ def main():
         sft_kwargs["max_length"] = args.max_seq_len
     elif "max_seq_length" in sft_sig:
         sft_kwargs["max_seq_length"] = args.max_seq_len
-    if "dataset_text_field" in sft_sig:
-        sft_kwargs["dataset_text_field"] = "text"
-    if "dataset_num_proc" in sft_sig:
-        sft_kwargs["dataset_num_proc"] = 8
-    if "packing" in sft_sig:
-        sft_kwargs["packing"] = True
-    if "packing_strategy" in sft_sig:
-        sft_kwargs["packing_strategy"] = "bfd"
+
+    if use_packed:
+        # Pre-packed datasets already have input_ids in max_seq_len chunks.
+        # Setting dataset_text_field or packing=True would cause SFTTrainer to
+        # re-tokenise or re-pack, wasting the entire pre-packing effort.
+        # With no text field and packing=False the trainer treats input_ids
+        # as a ready-to-use CLM dataset and creates labels automatically.
+        if "packing" in sft_sig:
+            sft_kwargs["packing"] = False
+        if "dataset_num_proc" in sft_sig:
+            sft_kwargs["dataset_num_proc"] = 4
+        log.info("Using pre-packed input_ids — dataset_text_field and packing disabled")
+    else:
+        if "dataset_text_field" in sft_sig:
+            sft_kwargs["dataset_text_field"] = "text"
+        if "dataset_num_proc" in sft_sig:
+            sft_kwargs["dataset_num_proc"] = 8
+        if "packing" in sft_sig:
+            sft_kwargs["packing"] = True
+        if "packing_strategy" in sft_sig:
+            sft_kwargs["packing_strategy"] = "bfd"
+
     # Avoid storing/returning eval logits; this prevents large fp32 casts in eval.
     if "prediction_loss_only" in sft_sig:
         sft_kwargs["prediction_loss_only"] = True
