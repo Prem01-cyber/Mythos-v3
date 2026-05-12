@@ -353,9 +353,9 @@ def main():
     # Non-zero dropout falls back to standard PEFT paths (still correct, just slower).
     #
     # use_gradient_checkpointing=True  → standard in-GPU activation recompute (no PCIe traffic).
-    # use_gradient_checkpointing="unsloth" → offloads embedding gradients to CPU every backward
-    #   pass ("smart offload"); saves ~500 MB VRAM but causes 9-16 GB/s PCIe spikes that inflate
-    #   step time from ~10s to ~40s on an 80GB GPU where that VRAM saving is irrelevant.
+    # use_gradient_checkpointing="unsloth" → offloads embedding gradients to CPU each backward
+    #   pass ("smart offload"). On 80GB with only LoRA optimizer states this saves ~500MB but
+    #   generates unnecessary PCIe traffic. True keeps all compute on the GPU.
     model = FastLanguageModel.get_peft_model(
         model,
         r=args.lora_r,

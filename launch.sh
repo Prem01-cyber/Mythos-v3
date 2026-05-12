@@ -138,7 +138,20 @@ PER_GPU_EVAL_BATCH=${PER_GPU_EVAL_BATCH:-1}
 GRAD_ACCUM=${GRAD_ACCUM:-8}
 EPOCHS=3
 EFF_BATCH=$(python3 -c "print($PER_GPU_BATCH * $NUM_GPUS * $GRAD_ACCUM)")
-TOTAL_STEPS=$(python3 -c "import math; print(math.ceil($TRAIN_LINES / $EFF_BATCH) * $EPOCHS)")
+
+# Use packed chunk count for step estimate when available (raw TRAIN_LINES is misleading
+# after packing: 1.6M raw examples pack into ~567K chunks at seq_len=1024)
+if [ -d "${TOKENIZED_DIR}/train_packed" ]; then
+    TRAIN_CHUNKS=$(python3 -c "
+from datasets import load_from_disk
+ds = load_from_disk('${TOKENIZED_DIR}/train_packed')
+print(len(ds))
+" 2>/dev/null || echo "$TRAIN_LINES")
+else
+    TRAIN_CHUNKS="$TRAIN_LINES"
+fi
+TOTAL_STEPS=$(python3 -c "import math; print(math.ceil($TRAIN_CHUNKS / $EFF_BATCH) * $EPOCHS)")
+TOTAL_HOURS=$(python3 -c "print(f'{$TOTAL_STEPS * 42 / 3600:.1f}')")   # ~42s/it on A100 80GB
 
 echo ""
 echo "=== Training configuration ==="
@@ -150,7 +163,8 @@ echo "  Grad accumul.  : $GRAD_ACCUM"
 echo "  Effective batch: $EFF_BATCH"
 echo "  GPUs           : $NUM_GPUS"
 echo "  Epochs         : $EPOCHS"
-echo "  Total steps    : ~$TOTAL_STEPS"
+echo "  Train chunks   : $TRAIN_CHUNKS  (packed at seq_len=$MAX_SEQ_LEN)"
+echo "  Total steps    : ~$TOTAL_STEPS  (~${TOTAL_HOURS}hr @ 42s/it on A100 80GB)"
 echo "  Learning rate  : 2e-5  (cosine schedule)"
 echo "  Warmup steps   : 100"
 echo "  Max seq len    : $MAX_SEQ_LEN"
