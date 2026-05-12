@@ -83,6 +83,9 @@ MODEL_ID=${MODEL_ID:-"Qwen/Qwen2.5-1.5B-Instruct"}
 MAX_SEQ_LEN=${MAX_SEQ_LEN:-2048}   # must match --max-seq-len passed to train.py below
 LORA_R=${LORA_R:-64}               # 64 = fast+quality, 128 = max capacity (marginal gain, +3% FLOPs)
 LORA_ALPHA=${LORA_ALPHA:-128}      # keep alpha = 2 × r (standard scaling)
+# Set DISABLE_GC=1 on GPUs with ≥120 GB VRAM (H200 NVL, H100 NVL) to skip activation
+# recompute and gain ~25% speed. Leave unset (default) for A100 80 GB and smaller.
+DISABLE_GC=${DISABLE_GC:-0}
 
 # ── Verify raw data exist ────────────────────────────────────────────────────
 for f in "$TRAIN_FILE" "$VAL_FILE" "$TEST_FILE"; do
@@ -169,6 +172,9 @@ echo "  Learning rate  : 2e-5  (cosine schedule)"
 echo "  Warmup steps   : 100"
 echo "  Max seq len    : $MAX_SEQ_LEN"
 echo "  Precision      : BFloat16"
+GC_STATUS="enabled (standard recompute)"
+[ "$DISABLE_GC" = "1" ] && GC_STATUS="DISABLED (--no-gc, requires ≥120 GB VRAM)"
+echo "  Grad checkpoint: $GC_STATUS"
 echo "  Trainer        : Unsloth SFTTrainer (pre-packed input_ids)"
 echo ""
 
@@ -176,6 +182,9 @@ echo ""
 echo "=== Launching training ==="
 echo "$(date)"
 echo ""
+
+NO_GC_FLAG=""
+[ "$DISABLE_GC" = "1" ] && NO_GC_FLAG="--no-gc"
 
 python3 "${SCRIPT_DIR}/train.py" \
     --model-id "$MODEL_ID" \
@@ -194,6 +203,7 @@ python3 "${SCRIPT_DIR}/train.py" \
     --per-gpu-eval-batch "$PER_GPU_EVAL_BATCH" \
     --grad-accum "$GRAD_ACCUM" \
     --max-seq-len "$MAX_SEQ_LEN" \
+    $NO_GC_FLAG \
     --warmup-steps 100 \
     --save-steps 500 \
     --eval-steps 500 \

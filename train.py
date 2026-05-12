@@ -71,6 +71,9 @@ def parse_args():
                    help="Cap test examples for final evaluation (default: full test set)")
     p.add_argument("--skip-final-test-eval", action="store_true",
                    help="Skip held-out test evaluation after training (useful for quick smoke runs)")
+    p.add_argument("--no-gc", action="store_true",
+                   help="Disable gradient checkpointing. Safe on GPUs with ≥120 GB VRAM (H200/H100 NVL). "
+                        "Saves ~25%% compute by skipping activation recompute.")
     p.add_argument("--seed",           type=int,   default=42)
     p.add_argument("--tokenized-dir",  default="./tokenized_data",
                    help="Directory of pre-formatted Arrow datasets (from pretokenize.py). "
@@ -356,6 +359,9 @@ def main():
     # use_gradient_checkpointing="unsloth" → offloads embedding gradients to CPU each backward
     #   pass ("smart offload"). On 80GB with only LoRA optimizer states this saves ~500MB but
     #   generates unnecessary PCIe traffic. True keeps all compute on the GPU.
+    gc_mode = False if args.no_gc else True
+    if args.no_gc:
+        log.info("Gradient checkpointing DISABLED (--no-gc). Ensure GPU has ≥120 GB VRAM.")
     model = FastLanguageModel.get_peft_model(
         model,
         r=args.lora_r,
@@ -363,7 +369,7 @@ def main():
         lora_alpha=args.lora_alpha,
         lora_dropout=0,
         bias="none",
-        use_gradient_checkpointing=True,
+        use_gradient_checkpointing=gc_mode,
         random_state=args.seed,
     )
 
@@ -387,7 +393,7 @@ def main():
         "warmup_steps": args.warmup_steps,
         "bf16": True,
         "fp16": False,
-        "gradient_checkpointing": True,
+        "gradient_checkpointing": not args.no_gc,
         "logging_steps": args.log_steps,
         "logging_first_step": True,
         "save_steps": args.save_steps,
