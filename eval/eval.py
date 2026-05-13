@@ -77,6 +77,10 @@ class VLLMEvaluator:
         self.adapter_path = adapter_path
         tp = tensor_parallel or max(1, torch.cuda.device_count())
 
+        # Disable DeepGEMM warmup — vLLM 0.20+ tries to warm up FP8 kernels even
+        # on A100 (Ampere), causing a crash when deep_gemm is not installed.
+        os.environ.setdefault("VLLM_USE_DEEP_GEMM", "0")
+
         if adapter_path:
             log.info(f"Loading vLLM: {model_path} + LoRA adapter {adapter_path}  tp={tp}")
             self._llm = LLM(

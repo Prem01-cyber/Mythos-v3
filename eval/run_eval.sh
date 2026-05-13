@@ -27,6 +27,10 @@
 
 set -euo pipefail
 
+# vLLM 0.20+ attempts a DeepGEMM (FP8) kernel warmup even on non-Hopper GPUs.
+# Disable it — the A100 doesn't support FP8 hardware anyway.
+export VLLM_USE_DEEP_GEMM=0
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
