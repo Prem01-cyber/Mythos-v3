@@ -31,7 +31,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-FINETUNED=${FINETUNED:-"${PROJECT_DIR}/mythos-v3-merged"}
 BASEMODEL=${BASEMODEL:-"Qwen/Qwen2.5-7B-Instruct"}
 OUTPUT_DIR="${PROJECT_DIR}/eval_results"
 MAX_MCQ=${MAX_MCQ:-500}           # SecBench MCQ questions per model
@@ -39,22 +38,47 @@ MAX_MCQ=${MAX_MCQ:-500}           # SecBench MCQ questions per model
 # ── GPU auto-detect ───────────────────────────────────────────────────────────
 N_GPUS=$(python3 -c "import torch; print(torch.cuda.device_count())" 2>/dev/null || echo 1)
 GPU_UTIL=${GPU_UTIL:-0.90}        # vLLM memory utilisation per GPU
-echo ""
-echo "=== Mythos v3 Evaluation ==="
-echo "  Fine-tuned model : $FINETUNED"
-echo "  Base model       : $BASEMODEL"
-echo "  GPUs detected    : $N_GPUS"
-echo "  GPU mem util     : $GPU_UTIL"
-echo "  Output dir       : $OUTPUT_DIR"
-echo "  Max MCQ          : $MAX_MCQ"
-echo ""
 
-# ── Verify fine-tuned model exists ────────────────────────────────────────────
-if [ ! -d "$FINETUNED" ]; then
-    echo "ERROR: Fine-tuned model not found at $FINETUNED"
-    echo "  Run training first, or set FINETUNED=/path/to/merged"
+# ── Auto-detect: merged model or LoRA adapter? ───────────────────────────────
+# Priority: FINETUNED env var → mythos-v3-7b-merged → mythos-v3-merged → LoRA adapter
+MODEL_FLAG=""
+if [ -n "${FINETUNED:-}" ] && [ -d "$FINETUNED" ]; then
+    MODEL_FLAG="--finetuned $FINETUNED"
+    MODEL_DISPLAY="$FINETUNED (merged)"
+elif [ -d "${PROJECT_DIR}/mythos-v3-7b-merged" ]; then
+    MODEL_FLAG="--finetuned ${PROJECT_DIR}/mythos-v3-7b-merged"
+    MODEL_DISPLAY="${PROJECT_DIR}/mythos-v3-7b-merged (merged)"
+elif [ -d "${PROJECT_DIR}/mythos-v3-merged" ]; then
+    MODEL_FLAG="--finetuned ${PROJECT_DIR}/mythos-v3-merged"
+    MODEL_DISPLAY="${PROJECT_DIR}/mythos-v3-merged (merged)"
+elif [ -n "${ADAPTER:-}" ] && [ -d "$ADAPTER" ]; then
+    MODEL_FLAG="--adapter $ADAPTER"
+    MODEL_DISPLAY="$ADAPTER (LoRA adapter, no merge)"
+elif [ -d "${PROJECT_DIR}/mythos-v3-7b-lora/final" ]; then
+    ADAPTER="${PROJECT_DIR}/mythos-v3-7b-lora/final"
+    MODEL_FLAG="--adapter $ADAPTER"
+    MODEL_DISPLAY="$ADAPTER (LoRA adapter, no merge)"
+else
+    echo "ERROR: No fine-tuned model found. Tried:"
+    echo "  \$FINETUNED, mythos-v3-7b-merged, mythos-v3-merged, mythos-v3-7b-lora/final"
+    echo ""
+    echo "  To merge the LoRA adapter into a full model first:"
+    echo "    python3 eval/merge.py"
+    echo ""
+    echo "  Or run eval directly from the adapter (no merge needed):"
+    echo "    ADAPTER=./mythos-v3-7b-lora/final bash eval/run_eval.sh"
     exit 1
 fi
+
+echo ""
+echo "=== Mythos v3 Evaluation ==="
+echo "  Model      : $MODEL_DISPLAY"
+echo "  Base model : $BASEMODEL"
+echo "  GPUs       : $N_GPUS"
+echo "  GPU util   : $GPU_UTIL"
+echo "  Output dir : $OUTPUT_DIR"
+echo "  Max MCQ    : $MAX_MCQ"
+echo ""
 
 # ── Check dependencies ────────────────────────────────────────────────────────
 python3 - <<'PYCHECK'
@@ -78,7 +102,7 @@ echo "=== Starting evaluation: $(date) ==="
 echo ""
 
 python3 "${SCRIPT_DIR}/eval.py" \
-    --finetuned  "$FINETUNED" \
+    $MODEL_FLAG \
     --base       "$BASEMODEL" \
     --output-dir "$OUTPUT_DIR" \
     --max-mcq    "$MAX_MCQ" \

@@ -64,6 +64,7 @@ class VLLMEvaluator:
     def __init__(
         self,
         model_path: str,
+        adapter_path: str | None = None,
         tensor_parallel: int | None = None,
         gpu_memory_util: float = 0.90,
         max_model_len: int = 4096,
@@ -72,20 +73,43 @@ class VLLMEvaluator:
         from vllm import LLM
         from transformers import AutoTokenizer
 
-        self.model_path = model_path
+        self.model_path   = model_path
+        self.adapter_path = adapter_path
         tp = tensor_parallel or max(1, torch.cuda.device_count())
 
-        log.info(f"Loading vLLM: {model_path}  tp={tp}  mem_util={gpu_memory_util}")
-        self._llm = LLM(
-            model=model_path,
-            tensor_parallel_size=tp,
-            gpu_memory_utilization=gpu_memory_util,
-            dtype=dtype,
-            max_model_len=max_model_len,
-            trust_remote_code=True,
-            enforce_eager=False,
-        )
-        self._tok = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        if adapter_path:
+            log.info(f"Loading vLLM: {model_path} + LoRA adapter {adapter_path}  tp={tp}")
+            self._llm = LLM(
+                model=model_path,
+                tensor_parallel_size=tp,
+                gpu_memory_utilization=gpu_memory_util,
+                dtype=dtype,
+                max_model_len=max_model_len,
+                trust_remote_code=True,
+                enforce_eager=False,
+                enable_lora=True,
+                max_lora_rank=128,
+            )
+            # Read lora_request lazily — imported only on GPU machine where vLLM exists
+            from vllm.lora.request import LoRARequest
+            self._lora_req: object | None = LoRARequest("mythos-v3", 1, adapter_path)
+            # Use adapter dir for tokenizer (has any special tokens added during training)
+            tok_path = adapter_path
+        else:
+            log.info(f"Loading vLLM: {model_path}  tp={tp}  mem_util={gpu_memory_util}")
+            self._llm = LLM(
+                model=model_path,
+                tensor_parallel_size=tp,
+                gpu_memory_utilization=gpu_memory_util,
+                dtype=dtype,
+                max_model_len=max_model_len,
+                trust_remote_code=True,
+                enforce_eager=False,
+            )
+            self._lora_req = None
+            tok_path = model_path
+
+        self._tok = AutoTokenizer.from_pretrained(tok_path, trust_remote_code=True)
         log.info("Model ready.")
 
     def _fmt(self, prompt: str, system: str) -> str:
@@ -112,7 +136,11 @@ class VLLMEvaluator:
         formatted = [self._fmt(p, system) for p in prompts]
 
         t0 = time.time()
-        outputs = self._llm.generate(formatted, params)
+        outputs = (
+            self._llm.generate(formatted, params, lora_request=self._lora_req)
+            if self._lora_req
+            else self._llm.generate(formatted, params)
+        )
         elapsed = time.time() - t0
 
         results = [o.outputs[0].text.strip() for o in outputs]
@@ -762,6 +790,7 @@ BENCHMARK_REGISTRY = {
 def evaluate_model(
     model_path: str,
     benchmarks: list[str],
+    adapter_path: str | None = None,
     max_mcq: int = 500,
     quick: bool = False,
     tensor_parallel: int | None = None,
@@ -769,6 +798,7 @@ def evaluate_model(
 ) -> dict:
     evaluator = VLLMEvaluator(
         model_path,
+        adapter_path=adapter_path,
         tensor_parallel=tensor_parallel,
         gpu_memory_util=gpu_memory_util,
     )
@@ -926,8 +956,15 @@ def generate_report(
 
 def parse_args():
     p = argparse.ArgumentParser(description="Mythos v3 Evaluation Suite")
-    p.add_argument("--finetuned",  required=True,
-                   help="Path to merged fine-tuned model (or HF model ID)")
+    # Two ways to specify the fine-tuned model:
+    #   --finetuned /path/to/merged-model   → full merged model, loaded directly
+    #   --adapter   /path/to/lora-adapter   → LoRA adapter on top of --base (no merge needed)
+    grp = p.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--finetuned",
+                     help="Path to merged fine-tuned model (output of merge.py / save_pretrained_merged)")
+    grp.add_argument("--adapter",
+                     help="Path to LoRA adapter directory (mythos-v3-7b-lora/final). "
+                          "vLLM loads it on top of --base without a merge step.")
     p.add_argument("--base",       default="Qwen/Qwen2.5-7B-Instruct",
                    help="Base model ID for comparison (default: Qwen/Qwen2.5-7B-Instruct)")
     p.add_argument("--no-base",    action="store_true",
@@ -958,7 +995,12 @@ def main():
     log.info("=" * 60)
     log.info("  Mythos v3 — Evaluation Suite")
     log.info("=" * 60)
-    log.info(f"  Fine-tuned : {args.finetuned}")
+    if args.adapter:
+        log.info(f"  Mode       : LoRA adapter (no merge needed)")
+        log.info(f"  Adapter    : {args.adapter}")
+        log.info(f"  Backbone   : {args.base}")
+    else:
+        log.info(f"  Fine-tuned : {args.finetuned}")
     log.info(f"  Base model : {args.base if not args.no_base else 'skipped'}")
     log.info(f"  Benchmarks : {', '.join(args.benchmarks)}")
     log.info(f"  GPUs       : {n_gpus}")
@@ -966,10 +1008,22 @@ def main():
     log.info("=" * 60)
 
     # ── Fine-tuned model ──────────────────────────────────────────────────────
-    log.info("\n[ 1/2 ] Evaluating FINE-TUNED model ...")
+    # Determine whether we have a full merged model or a LoRA adapter
+    if args.adapter:
+        ft_model_path   = args.base         # base model is the backbone
+        ft_adapter_path = args.adapter
+        ft_label        = f"{args.base} + LoRA({args.adapter})"
+        log.info(f"\n[ 1/2 ] Evaluating FINE-TUNED model (LoRA adapter, no merge) ...")
+    else:
+        ft_model_path   = args.finetuned
+        ft_adapter_path = None
+        ft_label        = args.finetuned
+        log.info(f"\n[ 1/2 ] Evaluating FINE-TUNED model (merged) ...")
+
     ft_results = evaluate_model(
-        args.finetuned,
+        ft_model_path,
         benchmarks=args.benchmarks,
+        adapter_path=ft_adapter_path,
         max_mcq=args.max_mcq,
         quick=args.quick,
         tensor_parallel=args.tp,
@@ -983,6 +1037,7 @@ def main():
         base_results = evaluate_model(
             args.base,
             benchmarks=args.benchmarks,
+            adapter_path=None,
             max_mcq=args.max_mcq,
             quick=args.quick,
             tensor_parallel=args.tp,
@@ -993,7 +1048,7 @@ def main():
     generate_report(
         ft_results=ft_results,
         base_results=base_results,
-        ft_model=args.finetuned,
+        ft_model=ft_label,
         base_model=None if args.no_base else args.base,
         output_dir=output_dir,
     )
