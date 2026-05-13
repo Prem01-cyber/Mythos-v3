@@ -48,6 +48,7 @@ nohup.out
 # Raw data directory (too large, regenerate with build_dataset.py)
 data/
 mythos-v3-adapter/
+mythos-v3-7b-lora/
 
 # All training data versions
 training_data_v1/
